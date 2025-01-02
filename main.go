@@ -26,9 +26,9 @@ func main() {
     }
 
     // Determine the address to connect to
-    address := *domain + ":" + *port
+    address := fmt.Sprintf("%s:%s", *domain, *port)
     if *ipaddr != "" {
-        address = *ipaddr + ":" + *port
+        address = fmt.Sprintf("%s:%s", *ipaddr, *port)
     }
 
     // Create a TLS connection with the specified server name
@@ -37,7 +37,8 @@ func main() {
         ServerName:         *domain, // Specify the server name
     })
     if err != nil {
-        log.Fatalf("Failed to connect: %v", err)
+        log.Printf("Failed to connect: %v", err)
+        os.Exit(1)
     }
     defer conn.Close()
 
@@ -49,8 +50,7 @@ func main() {
 
     // Output information about the end certificate
     cert := certs[0] // Take the first certificate, which is usually the end-entity certificate
-    now := time.Now().UTC()
-    daysRemaining := int(cert.NotAfter.Sub(now).Hours() / 24)
+    daysRemaining := int(time.Until(cert.NotAfter).Hours() / 24)
 
     // Print certificate information
     fmt.Printf("Certificate for %s\n", *domain)
