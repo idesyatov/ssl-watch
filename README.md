@@ -1,6 +1,6 @@
 # SSLWatch
 
-SSLWatch is a simple command-line tool to check the SSL certificate of a domain or an IP address. It retrieves and displays information about the SSL certificate, including the subject, issuer, expiration date, and the number of days remaining until expiration.
+SSLWatch is a simple command-line tool to check the SSL certificate of a domain. It retrieves and displays information about the SSL certificate, including the subject, issuer, expiration date, and the number of days remaining until expiration.
 
 ## Usage
 
