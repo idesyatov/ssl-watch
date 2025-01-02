@@ -14,9 +14,26 @@ To use SSLWatch, you need to specify either the domain you want to check or the 
 - `-ipaddr <ipaddr>`: The IP address to connect to (optional).
 - `-short`: Output only the number of days remaining until certificate expiration (optional).
 
-### Example
-
-To check the SSL certificate for a domain:
+### Examples
 
 ```bash
+# Check the SSL certificate for a domain
 go run main.go -domain example.com
+
+# Check a local certificate file
+go run main.go -certfile /path/to/certificate.crt
+
+# Check a domain with a specific port
+go run main.go -domain example.com -port 8443
+
+# Check a domain using a specific IP address
+go run main.go -domain example.com -ipaddr 192.0.2.1
+
+# Check a domain and output only the number of days remaining until expiration
+go run main.go -domain example.com -short
+
+# Check a local certificate file and output only the number of days remaining until expiration
+go run main.go -certfile /path/to/certificate.crt -short
+
+# Check a domain with a specific port and IP address
+go run main.go -domain example.com -port 8443 -ipaddr 192.0.2.1
