@@ -7,7 +7,6 @@ import (
     "log"
     "os"
     "time"
-
 )
 
 // it's just an implementation of a shell command with some extensions
@@ -17,11 +16,12 @@ func main() {
     domain := flag.String("domain", "", "Domain to check")
     port := flag.String("port", "443", "Port to connect (default is 443)")
     ipaddr := flag.String("ipaddr", "", "IP address to connect to (optional)")
+    short := flag.Bool("short", false, "Output only the number of days remaining until certificate expiration")
     flag.Parse()
 
     // Check if the domain is specified
     if *domain == "" {
-        fmt.Println("Usage: SSLWatch -domain <domain> [-port <port>] [-ipaddr <ipaddr>]")
+        fmt.Println("Usage: SSLWatch -domain <domain> [-port <port>] [-ipaddr <ipaddr>] [-short]")
         os.Exit(1)
     }
 
@@ -52,10 +52,18 @@ func main() {
     cert := certs[0] // Take the first certificate, which is usually the end-entity certificate
     daysRemaining := int(time.Until(cert.NotAfter).Hours() / 24)
 
-    // Print certificate information
-    fmt.Printf("Certificate for %s\n", *domain)
-    fmt.Printf("Subject: %s\n", cert.Subject)
-    fmt.Printf("Issuer: %s\n", cert.Issuer)
-    fmt.Printf("Expires on: %s\n", cert.NotAfter)
-    fmt.Printf("Days remaining: %d\n", daysRemaining)
+    // Get the remote address
+    remoteAddr := conn.RemoteAddr().String()
+
+    // Print certificate information based on the short flag
+    if *short {
+        fmt.Println(daysRemaining)
+    } else {
+        fmt.Printf("Certificate for %s\n", *domain)
+        fmt.Printf("Subject: %s\n", cert.Subject)
+        fmt.Printf("Issuer: %s\n", cert.Issuer)
+        fmt.Printf("Expires on: %s\n", cert.NotAfter)
+        fmt.Printf("Days remaining: %d\n", daysRemaining)
+        fmt.Printf("Connected from IP: %s\n", remoteAddr) // Output the remote IP address
+    }
 }
