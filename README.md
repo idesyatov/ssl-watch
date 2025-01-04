@@ -37,3 +37,12 @@ go run main.go -certfile /path/to/certificate.crt -short
 
 # Check a domain with a specific port and IP address
 go run main.go -domain example.com -port 8443 -ipaddr 192.0.2.1
+```
+
+## Installation
+
+You can install SSLWatch using the following command:
+
+```bash
+go install github.com/idesyatov/SSLWatch@latest
+```

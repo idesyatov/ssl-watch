@@ -17,7 +17,6 @@ func main() {
 
     // Validate the input to ensure at least one of domain or certFile is provided
     if err := validateInput(domain, certFile); err != nil {
-        log.Printf("Input validation error: %v", err)
         flag.PrintDefaults()
         return
     }
