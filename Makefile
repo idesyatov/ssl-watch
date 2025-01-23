@@ -1,4 +1,4 @@
-APP_NAME=sslwatch
+APP_NAME=ssl-watch
 SRC_FILE=main.go
 
 BIN_DIR=./bin
@@ -17,9 +17,9 @@ $(BIN_FILE): $(SRC_FILE)
 
 test:
 	@echo "Running tests..."
-	go test -v
+	go test ./...
 
 clean:
 	@echo "Cleaning up..."
-	go clean
+	go clean -cache
 	rm -f $(BIN_FILE)

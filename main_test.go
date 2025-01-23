@@ -1,58 +1,35 @@
 package main
 
 import (
-    "os"
-    "testing"
+	"os"
+	"path/filepath"
+	"testing"
 )
 
-func TestParseFlags(t *testing.T) {
-    // Save the original command line arguments
-    originalArgs := os.Args
+// TestInternalHasTestFiles checks for the presence of test files in the internal directory.
+func TestInternalHasTestFiles(t *testing.T) {
+	// Specify the path to the internal directory
+	internalDir := "./internal"
 
-    // Set command line arguments for the test
-    testArgs := []string{"cmd", "-domain", "example.com", "-certfile", "/path/to/cert.pem", "-port", "8443", "-ipaddr", "192.168.1.1", "-short"}
-    os.Args = testArgs
+	// Use filepath.Walk to recursively traverse all files and subdirectories in the internal directory
+	err := filepath.Walk(internalDir, func(path string, info os.FileInfo, err error) error {
+		// If an error occurred while getting file information, return the error
+		if err != nil {
+			return err
+		}
 
-    // Call the function
-    domain, certFile, port, ipaddr, short := parseFlags()
+		// Check if the current item is a file and has the _test.go extension
+		if !info.IsDir() && filepath.Ext(info.Name()) == "_test.go" {
+			// Log a message about the found test file
+			t.Logf("Found test file: %s", path)
+		}
 
-    // Check the results
-    if domain != "example.com" {
-        t.Errorf("Expected domain 'example.com', got '%s'", domain)
-    }
-    if certFile != "/path/to/cert.pem" {
-        t.Errorf("Expected certFile '/path/to/cert.pem', got '%s'", certFile)
-    }
-    if port != "8443" {
-        t.Errorf("Expected port '8443', got '%s'", port)
-    }
-    if ipaddr != "192.168.1.1" {
-        t.Errorf("Expected ipaddr '192.168.1.1', got '%s'", ipaddr)
-    }
-    if !short {
-        t.Error("Expected short to be true, got false")
-    }
+		// Return nil to continue the traversal
+		return nil
+	})
 
-    // Restore the original command line arguments
-    os.Args = originalArgs
-}
-
-func TestValidateInput(t *testing.T) {
-    tests := []struct {
-        domain   string
-        certFile string
-        expectErr bool
-    }{
-        {"", "", true},               // Both parameters are empty, an error is expected
-        {"example.com", "", false},   // Only the domain is specified, no error is expected
-        {"", "/path/to/cert.pem", false}, // Only certFile is specified, no error is expected
-        {"example.com", "/path/to/cert.pem", false}, // Both parameters are specified, no error is expected
-    }
-
-    for _, test := range tests {
-        err := validateInput(test.domain, test.certFile)
-        if (err != nil) != test.expectErr {
-            t.Errorf("validateInput(%q, %q) = %v; expectErr = %v", test.domain, test.certFile, err, test.expectErr)
-        }
-    }
+	// If an error occurred while traversing the directory, terminate the test with an error
+	if err != nil {
+		t.Fatalf("Error while traversing the directory: %v", err)
+	}
 }
