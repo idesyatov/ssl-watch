@@ -1,9 +1,9 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
-	"testing"
+  "os"
+  "path/filepath"
+  "testing"
 )
 
 // TestInternalHasTestFiles checks for the presence of test files in the internal directory.

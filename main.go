@@ -1,11 +1,11 @@
 package main
 
 import (
-    "log"
-    "crypto/x509"
-    "github.com/idesyatov/ssl-watch/internal/cert"
-    "github.com/idesyatov/ssl-watch/internal/flags"
-    "github.com/idesyatov/ssl-watch/internal/validation"
+  "log"
+  "crypto/x509"
+  "github.com/idesyatov/ssl-watch/internal/cert"
+  "github.com/idesyatov/ssl-watch/internal/flags"
+  "github.com/idesyatov/ssl-watch/internal/validation"
 )
 
 func main() {

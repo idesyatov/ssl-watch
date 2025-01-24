@@ -1,10 +1,10 @@
 package cert
 
 import (
-    "crypto/x509"
-    "crypto/x509/pkix"
-    "testing"
-    "time"
+  "crypto/x509"
+  "crypto/x509/pkix"
+  "testing"
+  "time"
 )
 
 // Mock implementation of CertificateFetcher for testing purposes

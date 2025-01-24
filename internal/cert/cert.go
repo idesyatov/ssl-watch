@@ -1,13 +1,13 @@
 package cert
 
 import (
-    "crypto/tls"
-    "crypto/x509"
-    "encoding/pem"
-    "fmt"
-    "net"
-    "os"
-    "time"
+  "crypto/tls"
+  "crypto/x509"
+  "encoding/pem"
+  "fmt"
+  "net"
+  "os"
+  "time"
 )
 
 // CertificateFetcher defines an interface for fetching certificates from a domain or IP address.
