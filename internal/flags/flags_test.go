@@ -12,12 +12,12 @@ import (
 // match the expected values.
 func TestParse(t *testing.T) {
 	// Mock command-line arguments for testing
-	os.Args = []string{"cmd", "-domain", "example.com", "-certfile", "cert.pem", "-port", "443", "-ipaddr", "192.168.1.1", "-short"}
+	os.Args = []string{"cmd", "-domain", "example.com", "-certfile", "cert.pem", "-port", "443", "-ipaddr", "192.168.1.1", "-short", "-version"}
 
 	// Create a new instance of the DefaultFlagParser
 	parser := NewDefaultFlagParser()
 	// Parse the command-line flags
-	domain, certFile, port, ipaddr, short := parser.Parse()
+	domain, certFile, port, ipaddr, short, showVersion := parser.Parse()
 
 	// Verify that the parsed values match the expected values
 	if domain != "example.com" {
@@ -34,6 +34,9 @@ func TestParse(t *testing.T) {
 	}
 	if !short {
 		t.Error("expected short to be true")
+	}
+	if !showVersion {
+		t.Error("expected showVersion to be true")
 	}
 }
 
