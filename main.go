@@ -2,17 +2,28 @@ package main
 
 import (
 	"crypto/x509"
+	"fmt"
+	"log"
 	"github.com/idesyatov/ssl-watch/internal/cert"
 	"github.com/idesyatov/ssl-watch/internal/flags"
 	"github.com/idesyatov/ssl-watch/internal/validation"
-	"log"
 )
+
+const version = "1.0.0"
+const gitUrl = "https://github.com/idesyatov/ssl-watch"
 
 func main() {
 	// Create a new flag parser to handle command-line arguments
 	parser := flags.NewDefaultFlagParser()
 	// Parse the command-line flags and retrieve the values
-	domain, certFile, port, ipaddr, short := parser.Parse()
+	domain, certFile, port, ipaddr, short, showVersion := parser.Parse()
+
+	// Check if the version flag is set
+	if showVersion {
+		fmt.Printf("Version: %s\n", version)
+		fmt.Printf("GitHub: %s\n", gitUrl)
+		return
+	}
 
 	// Create a new input validator to validate the parsed flags
 	validator := validation.NewDefaultInputValidator()
