@@ -12,7 +12,13 @@ import (
 // match the expected values.
 func TestParse(t *testing.T) {
 	// Mock command-line arguments for testing
-	os.Args = []string{"cmd", "-domain", "example.com", "-certfile", "cert.pem", "-port", "443", "-ipaddr", "192.168.1.1", "-short", "-version"}
+	os.Args = []string{"cmd",
+		"-domain", "example.com",
+		"-certfile", "cert.pem",
+		"-port", "443",
+		"-ipaddr", "192.168.1.1",
+		"-short",
+		"-version"}
 
 	// Create a new instance of the DefaultFlagParser
 	parser := NewDefaultFlagParser()
