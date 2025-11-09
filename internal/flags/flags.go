@@ -10,7 +10,7 @@ type FlagParser interface {
 	// It returns the domain, certificate file path, port, IP address, and a boolean indicating
 	// whether to output only the number of days remaining until certificate expiration.
 	Parse() (string, string, string, string, bool, bool)
-	
+
 	// PrintDefaults prints the default values of the command-line flags.
 	PrintDefaults()
 }

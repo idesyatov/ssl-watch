@@ -1,25 +1,34 @@
-APP_NAME=ssl-watch
-SRC_FILE=main.go
+# Makefile for HTTPRunner
 
-BIN_DIR=./bin
-BIN_FILE=$(BIN_DIR)/$(APP_NAME)
+# Variables
+BINARY_NAME = ssl-watch
+SOURCE_DIR = ./
+BUILD_DIR = ./bin
+GO_FILES = $(wildcard $(SOURCE_DIR)/*.go)
+BIN_FILE = $(BUILD_DIR)/$(BINARY_NAME)
 
-.PHONY: all build clean test
+# Default target
+.PHONY: all format test build clean
+all: format test build
 
-all: test build 
+# Format the Go files
+format:
+	@echo "Formatting Go files..."
+	@go fmt ./... || { echo "Formatting failed"; exit 1; }
 
-build: $(BIN_FILE)
-
-$(BIN_FILE): $(SRC_FILE)
-	@echo "Building the application..."
-	mkdir -p $(BIN_DIR)
-	go build -o $(BIN_FILE) $(SRC_FILE)
-
+# Run the project tests
 test:
 	@echo "Running tests..."
-	go test ./...
+	@go test ./... || { echo "Tests failed"; exit 1; }
 
+# Build the binary
+build: $(GO_FILES)
+	@echo "Building the binary..."
+	@mkdir -p $(BUILD_DIR)
+	@go build -o $(BIN_FILE) $(SOURCE_DIR) || { echo "Build failed"; exit 1; }
+
+# Clean up build artifacts
 clean:
 	@echo "Cleaning up..."
-	go clean -cache
-	rm -f $(BIN_FILE)
+	@go clean -cache
+	@rm -f $(BIN_FILE) || echo "Could not remove binary file"

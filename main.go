@@ -3,10 +3,10 @@ package main
 import (
 	"crypto/x509"
 	"fmt"
-	"log"
 	"github.com/idesyatov/ssl-watch/internal/cert"
 	"github.com/idesyatov/ssl-watch/internal/flags"
 	"github.com/idesyatov/ssl-watch/internal/validation"
+	"log"
 )
 
 const version = "1.0.0"
