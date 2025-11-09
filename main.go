@@ -9,7 +9,7 @@ import (
 	"log"
 )
 
-const version = "1.0.0"
+const version = "1.0.4"
 const gitUrl = "https://github.com/idesyatov/ssl-watch"
 
 func main() {

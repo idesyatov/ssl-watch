@@ -1,4 +1,4 @@
-# Makefile for HTTPRunner
+# Makefile for Golang projects
 
 # Variables
 BINARY_NAME = ssl-watch
@@ -32,3 +32,29 @@ clean:
 	@echo "Cleaning up..."
 	@go clean -cache
 	@rm -f $(BIN_FILE) || echo "Could not remove binary file"
+
+# Release target
+release:
+ifndef VERSION
+	$(error VERSION is not set. Please provide a version with VERSION=v1.0.0)
+endif
+ifndef BRANCH
+	$(error BRANCH is not set. Please provide a branch with BRANCH=dev)
+endif
+	@echo "Releasing version $(VERSION) to branch $(BRANCH)..."
+	@git add .
+	@git commit -m "[feat] release $(VERSION)" || { echo "Commit failed"; exit 1; }
+	@git tag $(VERSION)
+	@git push origin $(BRANCH) --tags || { echo "Push failed"; exit 1; }
+
+# Help
+help:
+	@echo "Makefile for Golang projects"
+	@echo "Usage:"
+	@echo "  make all      - Format the code, run tests, and build the binary"
+	@echo "  make format   - Format the Go source files according to Go standards"
+	@echo "  make test     - Execute the unit tests for the Go package"
+	@echo "  make build    - Compile the source code into a binary executable"
+	@echo "  make clean    - Remove all generated build artifacts and cached files"
+	@echo "  make release  - Commit changes, tag the version, and push to the remote repository"
+	@echo "  make help     - Display this help message"
