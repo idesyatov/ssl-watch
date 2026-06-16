@@ -41,10 +41,52 @@ ssl-watch -domain example.com -port 8443 -ipaddr 192.0.2.1
 
 ## Installation
 
-You can install ssl-watch using the following command:
+### Pre-built binaries
+
+Download an archive for your OS/arch from the [latest release](https://github.com/idesyatov/ssl-watch/releases/latest), extract it and place the binary somewhere on your `PATH`.
+
+Available builds:
+
+- `linux_amd64`, `linux_arm64`
+- `darwin_amd64` (Intel Mac), `darwin_arm64` (Apple Silicon)
+- `windows_amd64`
+
+Example (Linux amd64):
+
+```bash
+VERSION=1.0.7
+curl -L -o ssl-watch.tar.gz \
+  https://github.com/idesyatov/ssl-watch/releases/download/v$VERSION/ssl-watch_${VERSION}_linux_amd64.tar.gz
+tar -xzf ssl-watch.tar.gz ssl-watch
+sudo install -m 0755 ssl-watch /usr/local/bin/
+ssl-watch -version
+```
+
+Example (macOS, Apple Silicon):
+
+```bash
+VERSION=1.0.7
+curl -L -o ssl-watch.tar.gz \
+  https://github.com/idesyatov/ssl-watch/releases/download/v$VERSION/ssl-watch_${VERSION}_darwin_arm64.tar.gz
+tar -xzf ssl-watch.tar.gz ssl-watch
+sudo install -m 0755 ssl-watch /usr/local/bin/
+ssl-watch -version
+```
+
+SHA-256 checksums for all archives are published as `checksums.txt` on the same release page.
+
+### From source
+
+Using Go:
 
 ```bash
 go install github.com/idesyatov/ssl-watch@latest
 ```
 
-Also download, modify and compile it yourself as you wish
+Or clone and build manually:
+
+```bash
+git clone https://github.com/idesyatov/ssl-watch.git
+cd ssl-watch
+make build
+```
