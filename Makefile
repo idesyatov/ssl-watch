@@ -34,18 +34,27 @@ clean:
 	@rm -f $(BIN_FILE) || echo "Could not remove binary file"
 
 # Release target
+SOURCE_BRANCH ?= dev
+TARGET_BRANCH ?= master
+
 release:
 ifndef VERSION
-	$(error VERSION is not set. Please provide a version with VERSION=v1.0.0)
+	$(error VERSION is not set. Usage: make release VERSION=v1.0.7)
 endif
-ifndef BRANCH
-	$(error BRANCH is not set. Please provide a branch with BRANCH=dev)
-endif
-	@echo "Releasing version $(VERSION) to branch $(BRANCH)..."
-	@git add .
-	@git commit -m "[feat] release $(VERSION)" || { echo "Commit failed"; exit 1; }
+	@echo "Releasing $(VERSION): $(SOURCE_BRANCH) -> $(TARGET_BRANCH)"
+	@git diff --quiet && git diff --cached --quiet || { echo "Worktree is dirty. Commit or stash changes first."; exit 1; }
+	@git rev-parse $(VERSION) >/dev/null 2>&1 && { echo "Tag $(VERSION) already exists."; exit 1; } || true
+	@git fetch origin
+	@git checkout $(SOURCE_BRANCH)
+	@git push origin $(SOURCE_BRANCH)
+	@git checkout $(TARGET_BRANCH)
+	@git pull --ff-only origin $(TARGET_BRANCH)
+	@git merge --no-ff $(SOURCE_BRANCH) -m "Merge $(SOURCE_BRANCH) for $(VERSION)"
+	@git push origin $(TARGET_BRANCH)
 	@git tag $(VERSION)
-	@git push origin $(BRANCH) --tags || { echo "Push failed"; exit 1; }
+	@git push origin $(VERSION)
+	@git checkout $(SOURCE_BRANCH)
+	@echo "Done. Watch: https://github.com/idesyatov/ssl-watch/actions"
 
 # Help
 help:
@@ -56,6 +65,8 @@ help:
 	@echo "  make test          - Execute the unit tests for the Go package"
 	@echo "  make build         - Compile the source code into a binary executable"
 	@echo "  make clean         - Remove all generated build artifacts and cached files"
-	@echo "  make release       - Commit changes, tag the version, and push to the remote"
-	@echo "                      repository (example: make release VERSION=v1.0.0 BRANCH=dev)"
+	@echo "  make release       - Merge SOURCE_BRANCH -> TARGET_BRANCH, tag and push"
+	@echo "                      (example: make release VERSION=v1.0.7)"
+	@echo "                      Defaults: SOURCE_BRANCH=dev, TARGET_BRANCH=master"
+	@echo "                      Worktree must be clean — commit your changes first."
 	@echo "  make help          - Display this help message"
