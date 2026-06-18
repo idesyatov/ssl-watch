@@ -18,6 +18,8 @@ func TestParse(t *testing.T) {
 		"-ipaddr", "192.168.1.1",
 		"-short",
 		"-insecure",
+		"-threshold", "30",
+		"-output", "json",
 		"-version"}
 
 	// Create a new instance of the DefaultFlagParser
@@ -43,6 +45,12 @@ func TestParse(t *testing.T) {
 	}
 	if !cfg.Insecure {
 		t.Error("expected insecure to be true")
+	}
+	if cfg.Threshold != 30 {
+		t.Errorf("expected threshold to be 30, got %d", cfg.Threshold)
+	}
+	if cfg.Output != "json" {
+		t.Errorf("expected output to be 'json', got '%s'", cfg.Output)
 	}
 	if !cfg.ShowVersion {
 		t.Error("expected showVersion to be true")

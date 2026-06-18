@@ -3,6 +3,7 @@ package cert
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -37,10 +38,24 @@ type CertificateLoader interface {
 	Load(certFile string) (*CertInfo, error)
 }
 
+// PrintOptions controls how certificate information is rendered.
+type PrintOptions struct {
+	Short     bool // Print only the number of days remaining
+	JSON      bool // Print machine-readable JSON
+	Threshold int  // Days threshold for the expiry warning highlight (0 = disabled)
+	Color     bool // Colorize the human-readable output
+}
+
 // CertificatePrinter defines an interface for printing certificate details.
 type CertificatePrinter interface {
-	// Print outputs the details of the certificate, with an option for short output.
-	Print(info *CertInfo, short bool)
+	// Print outputs the details of the certificate according to the given options.
+	Print(info *CertInfo, opts PrintOptions)
+}
+
+// DaysUntilExpiry returns the whole number of days until the certificate expires.
+// The value is negative if the certificate has already expired.
+func DaysUntilExpiry(cert *x509.Certificate) int {
+	return int(time.Until(cert.NotAfter).Hours() / 24)
 }
 
 // CertificateFetcherImpl is an implementation of the CertificateFetcher interface.
@@ -129,18 +144,28 @@ func (l *CertificateLoaderImpl) Load(certFile string) (*CertInfo, error) {
 // It provides functionality to print details of a certificate.
 type CertificatePrinterImpl struct{}
 
-// Print outputs the details of the certificate, including subject, issuer, SANs,
-// serial number, signature algorithm, validity period and the number of days
-// remaining until expiration. For fetched certificates it also reports the used
-// IP address and the chain verification status. Output is reduced when short is true.
-func (p *CertificatePrinterImpl) Print(info *CertInfo, short bool) {
-	cert := info.Cert
-	daysRemaining := int(time.Until(cert.NotAfter).Hours() / 24)
+// Print outputs the details of the certificate according to opts: as JSON,
+// as a single days-remaining number (short), or as full human-readable text.
+func (p *CertificatePrinterImpl) Print(info *CertInfo, opts PrintOptions) {
+	days := DaysUntilExpiry(info.Cert)
 
-	if short {
-		fmt.Println(daysRemaining)
-		return
+	switch {
+	case opts.JSON:
+		p.printJSON(info, days)
+	case opts.Short:
+		fmt.Println(days)
+	default:
+		p.printText(info, days, opts)
 	}
+}
+
+// printText renders the full human-readable output, including subject, issuer,
+// SANs, serial number, signature algorithm, validity period and days remaining.
+// For fetched certificates it also reports the used IP address and the chain
+// verification status. When opts.Color is set, the days-remaining value and the
+// chain status are colorized.
+func (p *CertificatePrinterImpl) printText(info *CertInfo, days int, opts PrintOptions) {
+	cert := info.Cert
 
 	fmt.Printf("Certificate for %s\n", cert.Subject.CommonName)
 	fmt.Printf("Subject: %s\n", cert.Subject)
@@ -152,18 +177,93 @@ func (p *CertificatePrinterImpl) Print(info *CertInfo, short bool) {
 	fmt.Printf("Signature: %s\n", cert.SignatureAlgorithm)
 	fmt.Printf("Valid from: %s\n", cert.NotBefore)
 	fmt.Printf("Expires on: %s\n", cert.NotAfter)
-	fmt.Printf("Days remaining: %d\n", daysRemaining)
+
+	daysStr := fmt.Sprintf("%d", days)
+	if opts.Color {
+		switch {
+		case days < 0:
+			daysStr = colorize(daysStr, colorRed)
+		case opts.Threshold > 0 && days < opts.Threshold:
+			daysStr = colorize(daysStr, colorYellow)
+		default:
+			daysStr = colorize(daysStr, colorGreen)
+		}
+	}
+	fmt.Printf("Days remaining: %s\n", daysStr)
 
 	if !info.FromFile {
 		fmt.Printf("Used IP address: %s\n", info.UsedIP)
 	}
 	if info.Verified {
 		if info.ChainErr == nil {
-			fmt.Println("Chain: VALID")
+			fmt.Printf("Chain: %s\n", maybeColor("VALID", colorGreen, opts.Color))
 		} else {
-			fmt.Printf("Chain: INVALID (%v)\n", info.ChainErr)
+			fmt.Printf("Chain: %s (%v)\n", maybeColor("INVALID", colorRed, opts.Color), info.ChainErr)
 		}
 	}
+}
+
+// printJSON renders the certificate information as indented JSON.
+func (p *CertificatePrinterImpl) printJSON(info *CertInfo, days int) {
+	cert := info.Cert
+	out := struct {
+		CommonName    string   `json:"common_name"`
+		Subject       string   `json:"subject"`
+		Issuer        string   `json:"issuer"`
+		SANs          []string `json:"sans,omitempty"`
+		Serial        string   `json:"serial"`
+		Signature     string   `json:"signature_algorithm"`
+		NotBefore     string   `json:"not_before"`
+		NotAfter      string   `json:"not_after"`
+		DaysRemaining int      `json:"days_remaining"`
+		UsedIP        string   `json:"used_ip,omitempty"`
+		ChainValid    *bool    `json:"chain_valid,omitempty"`
+		ChainError    string   `json:"chain_error,omitempty"`
+	}{
+		CommonName:    cert.Subject.CommonName,
+		Subject:       cert.Subject.String(),
+		Issuer:        cert.Issuer.String(),
+		SANs:          cert.DNSNames,
+		Serial:        formatSerial(cert.SerialNumber),
+		Signature:     cert.SignatureAlgorithm.String(),
+		NotBefore:     cert.NotBefore.UTC().Format(time.RFC3339),
+		NotAfter:      cert.NotAfter.UTC().Format(time.RFC3339),
+		DaysRemaining: days,
+		UsedIP:        info.UsedIP,
+	}
+	if info.Verified {
+		valid := info.ChainErr == nil
+		out.ChainValid = &valid
+		if info.ChainErr != nil {
+			out.ChainError = info.ChainErr.Error()
+		}
+	}
+
+	b, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to encode JSON: %v\n", err)
+		return
+	}
+	fmt.Println(string(b))
+}
+
+// ANSI color codes used for the human-readable output.
+const (
+	colorReset  = "\033[0m"
+	colorRed    = "\033[31m"
+	colorYellow = "\033[33m"
+	colorGreen  = "\033[32m"
+)
+
+// colorize wraps s in the given ANSI color and a reset.
+func colorize(s, color string) string { return color + s + colorReset }
+
+// maybeColor colorizes s only when on is true.
+func maybeColor(s, color string, on bool) string {
+	if on {
+		return colorize(s, color)
+	}
+	return s
 }
 
 // formatSerial renders a certificate serial number as upper-case, colon-separated

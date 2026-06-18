@@ -13,6 +13,8 @@ type Config struct {
 	IPAddr      string // IP address to connect to (optional)
 	Short       bool   // Output only the number of days remaining until expiration
 	Insecure    bool   // Skip certificate chain verification
+	Threshold   int    // Expiry warning threshold in days (0 = disabled); drives exit code 2
+	Output      string // Output format: "text" or "json"
 	ShowVersion bool   // Show version and exit
 }
 
@@ -36,6 +38,8 @@ type DefaultFlagParser struct {
 	ipaddr      *string
 	short       *bool
 	insecure    *bool
+	threshold   *int
+	output      *string
 	showVersion *bool
 }
 
@@ -49,6 +53,8 @@ func (d *DefaultFlagParser) Parse() Config {
 		IPAddr:      *d.ipaddr,
 		Short:       *d.short,
 		Insecure:    *d.insecure,
+		Threshold:   *d.threshold,
+		Output:      *d.output,
 		ShowVersion: *d.showVersion,
 	}
 }
@@ -70,6 +76,8 @@ func NewDefaultFlagParser() FlagParser {
 		ipaddr:      fs.String("ipaddr", "", "IP address to connect to (optional)"),
 		short:       fs.Bool("short", false, "Output only the number of days remaining until certificate expiration"),
 		insecure:    fs.Bool("insecure", false, "Skip certificate chain verification"),
+		threshold:   fs.Int("threshold", 0, "Warn (exit code 2) when days remaining is below this value (0 disables)"),
+		output:      fs.String("output", "text", "Output format: text or json"),
 		showVersion: fs.Bool("version", false, "Show version"),
 	}
 }
