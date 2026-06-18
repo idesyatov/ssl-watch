@@ -38,12 +38,14 @@ type CertificateFetcherImpl struct{}
 // Fetch connects to the specified domain or IP address and retrieves the TLS certificate.
 // It returns the certificate, the used IP address, and an error if the connection fails.
 func (f *CertificateFetcherImpl) Fetch(domain, port, ipaddr string) (*x509.Certificate, string, error) {
-	address := fmt.Sprintf("%s:%s", domain, port)
+	host := domain
 	if ipaddr != "" {
-		address = fmt.Sprintf("%s:%s", ipaddr, port)
+		host = ipaddr
 	}
+	address := net.JoinHostPort(host, port)
 
-	conn, err := tls.Dial("tcp", address, &tls.Config{
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	conn, err := tls.DialWithDialer(dialer, "tcp", address, &tls.Config{
 		InsecureSkipVerify: true,
 		ServerName:         domain,
 	})
@@ -57,7 +59,10 @@ func (f *CertificateFetcherImpl) Fetch(domain, port, ipaddr string) (*x509.Certi
 		return nil, "", fmt.Errorf("no certificates found for %s", address)
 	}
 
-	usedIP := conn.RemoteAddr().(*net.TCPAddr).IP.String()
+	usedIP := conn.RemoteAddr().String()
+	if tcpAddr, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+		usedIP = tcpAddr.IP.String()
+	}
 	return certs[0], usedIP, nil
 }
 

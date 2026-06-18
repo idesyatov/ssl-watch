@@ -2,7 +2,6 @@ package flags
 
 import (
 	"bytes"
-	"flag"
 	"os"
 	"testing"
 )
@@ -23,25 +22,25 @@ func TestParse(t *testing.T) {
 	// Create a new instance of the DefaultFlagParser
 	parser := NewDefaultFlagParser()
 	// Parse the command-line flags
-	domain, certFile, port, ipaddr, short, showVersion := parser.Parse()
+	cfg := parser.Parse()
 
 	// Verify that the parsed values match the expected values
-	if domain != "example.com" {
-		t.Errorf("expected domain to be 'example.com', got '%s'", domain)
+	if cfg.Domain != "example.com" {
+		t.Errorf("expected domain to be 'example.com', got '%s'", cfg.Domain)
 	}
-	if certFile != "cert.pem" {
-		t.Errorf("expected certFile to be 'cert.pem', got '%s'", certFile)
+	if cfg.CertFile != "cert.pem" {
+		t.Errorf("expected certFile to be 'cert.pem', got '%s'", cfg.CertFile)
 	}
-	if port != "443" {
-		t.Errorf("expected port to be '443', got '%s'", port)
+	if cfg.Port != "443" {
+		t.Errorf("expected port to be '443', got '%s'", cfg.Port)
 	}
-	if ipaddr != "192.168.1.1" {
-		t.Errorf("expected ipaddr to be '192.168.1.1', got '%s'", ipaddr)
+	if cfg.IPAddr != "192.168.1.1" {
+		t.Errorf("expected ipaddr to be '192.168.1.1', got '%s'", cfg.IPAddr)
 	}
-	if !short {
+	if !cfg.Short {
 		t.Error("expected short to be true")
 	}
-	if !showVersion {
+	if !cfg.ShowVersion {
 		t.Error("expected showVersion to be true")
 	}
 }
@@ -49,12 +48,13 @@ func TestParse(t *testing.T) {
 // TestPrintDefaults tests the PrintDefaults method of the DefaultFlagParser.
 // It captures the output of the flag defaults and verifies that some output is produced.
 func TestPrintDefaults(t *testing.T) {
-	// Create a buffer to capture the output of PrintDefaults
-	var buf bytes.Buffer
-	flag.CommandLine.SetOutput(&buf)
-
 	// Create a new instance of the DefaultFlagParser
 	parser := NewDefaultFlagParser()
+
+	// Create a buffer to capture the output of PrintDefaults
+	var buf bytes.Buffer
+	parser.(*DefaultFlagParser).fs.SetOutput(&buf)
+
 	// Call PrintDefaults to output the default flag values
 	parser.PrintDefaults()
 
