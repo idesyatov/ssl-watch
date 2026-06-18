@@ -3,6 +3,7 @@ package flags
 import (
 	"bytes"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -73,5 +74,23 @@ func TestPrintDefaults(t *testing.T) {
 	// Verify that the output buffer is not empty
 	if buf.Len() == 0 {
 		t.Error("expected PrintDefaults to produce output, but got none")
+	}
+}
+
+// TestUsage verifies the usage header includes the project link, a usage example
+// and the flag list.
+func TestUsage(t *testing.T) {
+	parser := NewDefaultFlagParser()
+
+	var buf bytes.Buffer
+	parser.(*DefaultFlagParser).fs.SetOutput(&buf)
+
+	parser.Usage()
+
+	out := buf.String()
+	for _, want := range []string{GitURL, "Usage:", "-domain", "-threshold"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected usage output to contain %q, got:\n%s", want, out)
+		}
 	}
 }

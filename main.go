@@ -11,8 +11,6 @@ import (
 
 var version = "dev"
 
-const gitUrl = "https://github.com/idesyatov/ssl-watch"
-
 func main() {
 	// Create a new flag parser to handle command-line arguments
 	parser := flags.NewDefaultFlagParser()
@@ -22,7 +20,7 @@ func main() {
 	// Check if the version flag is set
 	if cfg.ShowVersion {
 		fmt.Printf("Version: %s\n", version)
-		fmt.Printf("GitHub: %s\n", gitUrl)
+		fmt.Printf("GitHub: %s\n", flags.GitURL)
 		return
 	}
 
@@ -30,16 +28,16 @@ func main() {
 	validator := validation.NewDefaultInputValidator()
 	// Validate the domain and certificate file inputs
 	if err := validator.Validate(cfg.Domain, cfg.CertFile); err != nil {
-		// If validation fails, report the error, print the default flag values and exit non-zero
+		// If validation fails, report the error, print the usage and exit non-zero
 		fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
-		parser.PrintDefaults()
+		parser.Usage()
 		os.Exit(1)
 	}
 
 	// Validate the requested output format
 	if cfg.Output != "text" && cfg.Output != "json" {
 		fmt.Fprintf(os.Stderr, "Error: invalid -output %q (expected \"text\" or \"json\")\n\n", cfg.Output)
-		parser.PrintDefaults()
+		parser.Usage()
 		os.Exit(1)
 	}
 
