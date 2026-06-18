@@ -105,37 +105,37 @@ The `chain_valid` and `chain_error` fields are omitted for certificates loaded f
 
 ## Installation
 
-### Pre-built binaries
+### Install script (Linux & macOS)
 
-Download an archive for your OS/arch from the [latest release](https://github.com/idesyatov/ssl-watch/releases/latest), extract it and place the binary somewhere on your `PATH`.
+The fastest way — one command that detects your OS, architecture and the latest
+release automatically, then installs the binary to `/usr/local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/idesyatov/ssl-watch/master/install.sh | sh
+```
+
+`sudo` is requested only if the install directory is not writable. You can override
+the target directory or pin a version with environment variables:
+
+```bash
+# Install to a custom directory (no sudo needed)
+curl -fsSL https://raw.githubusercontent.com/idesyatov/ssl-watch/master/install.sh | BINDIR="$HOME/.local/bin" sh
+
+# Install a specific version
+curl -fsSL https://raw.githubusercontent.com/idesyatov/ssl-watch/master/install.sh | VERSION=v1.2.0 sh
+```
+
+> Prefer to review before running? Download [`install.sh`](https://raw.githubusercontent.com/idesyatov/ssl-watch/master/install.sh), read it, then run `sh install.sh`.
+
+### Pre-built binaries (manual)
+
+Alternatively, download an archive for your OS/arch from the [latest release](https://github.com/idesyatov/ssl-watch/releases/latest), extract it and place the binary somewhere on your `PATH`.
 
 Available builds:
 
 - `linux_amd64`, `linux_arm64`
 - `darwin_amd64` (Intel Mac), `darwin_arm64` (Apple Silicon)
-- `windows_amd64`
-
-Example (Linux amd64):
-
-```bash
-VERSION=1.0.7
-curl -L -o ssl-watch.tar.gz \
-  https://github.com/idesyatov/ssl-watch/releases/download/v$VERSION/ssl-watch_${VERSION}_linux_amd64.tar.gz
-tar -xzf ssl-watch.tar.gz ssl-watch
-sudo install -m 0755 ssl-watch /usr/local/bin/
-ssl-watch -version
-```
-
-Example (macOS, Apple Silicon):
-
-```bash
-VERSION=1.0.7
-curl -L -o ssl-watch.tar.gz \
-  https://github.com/idesyatov/ssl-watch/releases/download/v$VERSION/ssl-watch_${VERSION}_darwin_arm64.tar.gz
-tar -xzf ssl-watch.tar.gz ssl-watch
-sudo install -m 0755 ssl-watch /usr/local/bin/
-ssl-watch -version
-```
+- `windows_amd64` (`.zip` archive)
 
 SHA-256 checksums for all archives are published as `checksums.txt` on the same release page.
 
