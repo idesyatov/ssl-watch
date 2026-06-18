@@ -18,9 +18,35 @@ BINDIR="${BINDIR:-/usr/local/bin}"
 
 err() { echo "error: $*" >&2; exit 1; }
 
+# require checks that a tool is available and, if not, prints an actionable
+# install command for the detected package manager before exiting.
+require() {
+  tool="$1"
+  command -v "$tool" >/dev/null 2>&1 && return
+  echo "error: '$tool' is required but was not found. Install it with:" >&2
+  if command -v dnf >/dev/null 2>&1; then
+    echo "  sudo dnf install -y $tool        (RHEL/CentOS/Fedora)" >&2
+  elif command -v yum >/dev/null 2>&1; then
+    echo "  sudo yum install -y $tool        (RHEL/CentOS)" >&2
+  elif command -v apt-get >/dev/null 2>&1; then
+    echo "  sudo apt-get install -y $tool    (Debian/Ubuntu)" >&2
+  elif command -v apk >/dev/null 2>&1; then
+    echo "  sudo apk add $tool               (Alpine)" >&2
+  elif command -v zypper >/dev/null 2>&1; then
+    echo "  sudo zypper install -y $tool     (openSUSE)" >&2
+  elif command -v pacman >/dev/null 2>&1; then
+    echo "  sudo pacman -S $tool             (Arch)" >&2
+  elif command -v brew >/dev/null 2>&1; then
+    echo "  brew install $tool               (macOS/Homebrew)" >&2
+  else
+    echo "  (install '$tool' with your system package manager)" >&2
+  fi
+  exit 1
+}
+
 # --- required tools ---
-command -v curl >/dev/null 2>&1 || err "curl is required"
-command -v tar  >/dev/null 2>&1 || err "tar is required"
+require curl
+require tar
 
 # --- detect OS ---
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
