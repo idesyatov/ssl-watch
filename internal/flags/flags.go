@@ -12,6 +12,7 @@ type Config struct {
 	Port        string // Port to connect to
 	IPAddr      string // IP address to connect to (optional)
 	Short       bool   // Output only the number of days remaining until expiration
+	Insecure    bool   // Skip certificate chain verification
 	ShowVersion bool   // Show version and exit
 }
 
@@ -34,6 +35,7 @@ type DefaultFlagParser struct {
 	port        *string
 	ipaddr      *string
 	short       *bool
+	insecure    *bool
 	showVersion *bool
 }
 
@@ -46,6 +48,7 @@ func (d *DefaultFlagParser) Parse() Config {
 		Port:        *d.port,
 		IPAddr:      *d.ipaddr,
 		Short:       *d.short,
+		Insecure:    *d.insecure,
 		ShowVersion: *d.showVersion,
 	}
 }
@@ -66,6 +69,7 @@ func NewDefaultFlagParser() FlagParser {
 		port:        fs.String("port", "443", "Port to connect to (optional)"),
 		ipaddr:      fs.String("ipaddr", "", "IP address to connect to (optional)"),
 		short:       fs.Bool("short", false, "Output only the number of days remaining until certificate expiration"),
+		insecure:    fs.Bool("insecure", false, "Skip certificate chain verification"),
 		showVersion: fs.Bool("version", false, "Show version"),
 	}
 }

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/x509"
 	"fmt"
 	"github.com/idesyatov/ssl-watch/internal/cert"
 	"github.com/idesyatov/ssl-watch/internal/flags"
@@ -37,9 +36,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	var certInfo *x509.Certificate // Variable to hold the retrieved certificate information
-	var err error                  // Variable to hold any error that occurs
-	var usedIP string              // Variable to hold the used IP address
+	var info *cert.CertInfo // Variable to hold the retrieved certificate information
+	var err error           // Variable to hold any error that occurs
 
 	// Create instances of the certificate fetcher, loader, and printer
 	var fetcher cert.CertificateFetcher = &cert.CertificateFetcherImpl{}
@@ -48,10 +46,10 @@ func main() {
 
 	// If a certificate file is provided, load the certificate from the file
 	if cfg.CertFile != "" {
-		certInfo, err = loader.Load(cfg.CertFile)
+		info, err = loader.Load(cfg.CertFile)
 	} else {
 		// Otherwise, fetch the certificate from the specified domain or IP address
-		certInfo, usedIP, err = fetcher.Fetch(cfg.Domain, cfg.Port, cfg.IPAddr)
+		info, err = fetcher.Fetch(cfg.Domain, cfg.Port, cfg.IPAddr, cfg.Insecure)
 	}
 
 	// Check for errors during certificate retrieval
@@ -59,6 +57,6 @@ func main() {
 		log.Fatalf("Error retrieving certificate: %v", err)
 	}
 
-	// Print the certificate information, including the used IP address and whether a cert file was used
-	printer.Print(certInfo, usedIP, cfg.CertFile != "", cfg.Short)
+	// Print the certificate information
+	printer.Print(info, cfg.Short)
 }

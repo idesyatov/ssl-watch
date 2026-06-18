@@ -17,6 +17,7 @@ func TestParse(t *testing.T) {
 		"-port", "443",
 		"-ipaddr", "192.168.1.1",
 		"-short",
+		"-insecure",
 		"-version"}
 
 	// Create a new instance of the DefaultFlagParser
@@ -39,6 +40,9 @@ func TestParse(t *testing.T) {
 	}
 	if !cfg.Short {
 		t.Error("expected short to be true")
+	}
+	if !cfg.Insecure {
+		t.Error("expected insecure to be true")
 	}
 	if !cfg.ShowVersion {
 		t.Error("expected showVersion to be true")

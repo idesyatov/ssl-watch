@@ -6,131 +6,34 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"io"
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
-// Mock implementation of CertificateFetcher for testing purposes
-type MockCertificateFetcher struct {
-	Cert     *x509.Certificate // The certificate to be returned
-	UsedIP   string            // The IP address that was used
-	FetchErr error             // Any error that might occur during fetching
-}
-
-// Fetch simulates fetching a certificate for a given domain and port
-func (m *MockCertificateFetcher) Fetch(domain, port, ipaddr string) (*x509.Certificate, string, error) {
-	return m.Cert, m.UsedIP, m.FetchErr // Return the mock certificate, used IP, and any error
-}
-
-// Mock implementation of CertificateLoader for testing purposes
-type MockCertificateLoader struct {
-	Cert    *x509.Certificate // The certificate to be loaded
-	LoadErr error             // Any error that might occur during loading
-}
-
-// Load simulates loading a certificate from a file
-func (m *MockCertificateLoader) Load(certFile string) (*x509.Certificate, error) {
-	return m.Cert, m.LoadErr // Return the mock certificate and any error
-}
-
-// Mock implementation of CertificatePrinter for testing purposes
-type MockCertificatePrinter struct {
-	PrintedCert   *x509.Certificate // The certificate that was printed
-	UsedIP        string            // The IP address that was used
-	UsingCertFile bool              // Indicates if a certificate file was used
-	Short         bool              // Indicates if the short format was used
-}
-
-// Print simulates printing a certificate with associated information
-func (m *MockCertificatePrinter) Print(cert *x509.Certificate, usedIP string, usingCertFile bool, short bool) {
-	m.PrintedCert = cert            // Store the printed certificate
-	m.UsedIP = usedIP               // Store the used IP address
-	m.UsingCertFile = usingCertFile // Store whether a cert file was used
-	m.Short = short                 // Store whether the short format was used
-}
-
-// TestCertificateFetcher_Fetch tests the Fetch method of MockCertificateFetcher
-func TestCertificateFetcher_Fetch(t *testing.T) {
-	cert := &x509.Certificate{
-		Subject: pkix.Name{
-			CommonName: "example.com", // Set the common name for the certificate
-		},
-		NotAfter: time.Now().Add(30 * 24 * time.Hour), // Set expiration to 30 days from now
-	}
-
-	fetcher := &MockCertificateFetcher{
-		Cert:   cert,        // Initialize the fetcher with the mock certificate
-		UsedIP: "192.0.2.1", // Set the used IP address
-	}
-
-	// Call the Fetch method and check the results
-	resultCert, usedIP, err := fetcher.Fetch("example.com", "443", "")
+// captureStdout runs fn while capturing everything written to os.Stdout and
+// returns it as a string.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stdout
+	r, w, err := os.Pipe()
 	if err != nil {
-		t.Errorf("unexpected error: %v", err) // Check for unexpected errors
+		t.Fatalf("failed to create pipe: %v", err)
 	}
-	if resultCert != cert {
-		t.Errorf("expected cert %v, got %v", cert, resultCert) // Validate the returned certificate
-	}
-	if usedIP != "192.0.2.1" {
-		t.Errorf("expected used IP '192.0.2.1', got '%s'", usedIP) // Validate the used IP address
-	}
-}
+	os.Stdout = w
+	defer func() { os.Stdout = orig }()
 
-// TestCertificateLoader_Load tests the Load method of MockCertificateLoader
-func TestCertificateLoader_Load(t *testing.T) {
-	cert := &x509.Certificate{
-		Subject: pkix.Name{
-			CommonName: "example.com", // Set the common name for the certificate
-		},
-	}
-
-	loader := &MockCertificateLoader{
-		Cert: cert, // Initialize the loader with the mock certificate
-	}
-
-	// Call the Load method and check the results
-	resultCert, err := loader.Load("test.crt")
+	fn()
+	w.Close()
+	out, err := io.ReadAll(r)
 	if err != nil {
-		t.Errorf("unexpected error: %v", err) // Check for unexpected errors
+		t.Fatalf("failed to read captured output: %v", err)
 	}
-	if resultCert != cert {
-		t.Errorf("expected cert %v, got %v", cert, resultCert) // Validate the returned certificate
-	}
-}
-
-// TestCertificatePrinter_Print tests the Print method of MockCertificatePrinter
-func TestCertificatePrinter_Print(t *testing.T) {
-	cert := &x509.Certificate{
-		Subject: pkix.Name{
-			CommonName: "example.com", // Set the common name for the certificate
-		},
-		NotAfter: time.Now().Add(30 * 24 * time.Hour), // Set expiration to 30 days from now
-	}
-
-	printer := &MockCertificatePrinter{} // Initialize the printer
-
-	// Call the Print method with the mock certificate and associated information
-	printer.Print(cert, "192.0.2.1", false, false)
-
-	// Validate the printed certificate
-	if printer.PrintedCert != cert {
-		t.Errorf("expected printed cert %v, got %v", cert, printer.PrintedCert) // Check if the printed certificate matches the expected one
-	}
-	// Validate the used IP address
-	if printer.UsedIP != "192.0.2.1" {
-		t.Errorf("expected used IP '192.0.2.1', got '%s'", printer.UsedIP) // Check if the used IP address matches the expected one
-	}
-	// Validate that the usingCertFile flag is false
-	if printer.UsingCertFile {
-		t.Error("expected usingCertFile to be false") // Ensure that the usingCertFile flag is set correctly
-	}
-	// Validate that the short flag is false
-	if printer.Short {
-		t.Error("expected short to be false") // Ensure that the short flag is set correctly
-	}
+	return string(out)
 }
 
 // TestCertificateLoaderImpl_Load tests the real Load implementation by generating
@@ -165,12 +68,18 @@ func TestCertificateLoaderImpl_Load(t *testing.T) {
 
 	// Load the certificate using the real implementation
 	loader := &CertificateLoaderImpl{}
-	cert, err := loader.Load(certPath)
+	info, err := loader.Load(certPath)
 	if err != nil {
 		t.Fatalf("unexpected error loading certificate: %v", err)
 	}
-	if cert.Subject.CommonName != "load-test.example" {
-		t.Errorf("expected CommonName 'load-test.example', got '%s'", cert.Subject.CommonName)
+	if info.Cert.Subject.CommonName != "load-test.example" {
+		t.Errorf("expected CommonName 'load-test.example', got '%s'", info.Cert.Subject.CommonName)
+	}
+	if !info.FromFile {
+		t.Error("expected FromFile to be true for a loaded certificate")
+	}
+	if info.Verified {
+		t.Error("expected Verified to be false for a file-loaded certificate")
 	}
 }
 
@@ -191,5 +100,89 @@ func TestCertificateLoaderImpl_Load_Errors(t *testing.T) {
 	}
 	if _, err := loader.Load(badPath); err == nil {
 		t.Error("expected error for invalid PEM content, got nil")
+	}
+}
+
+// TestFormatSerial verifies serial numbers are rendered as colon-separated hex.
+func TestFormatSerial(t *testing.T) {
+	cases := map[string]struct {
+		in   *big.Int
+		want string
+	}{
+		"zero":        {big.NewInt(0), "0"},
+		"single byte": {big.NewInt(15), "0F"},
+		"two bytes":   {big.NewInt(0x0FA3), "0F:A3"},
+	}
+	for name, c := range cases {
+		if got := formatSerial(c.in); got != c.want {
+			t.Errorf("%s: formatSerial(%v) = %q, want %q", name, c.in, got, c.want)
+		}
+	}
+}
+
+// TestCertificatePrinter_Print verifies the full output contains the expected
+// fields, including SANs, serial, signature algorithm and chain status.
+func TestCertificatePrinter_Print(t *testing.T) {
+	cert := &x509.Certificate{
+		Subject:            pkix.Name{CommonName: "example.com"},
+		DNSNames:           []string{"example.com", "www.example.com"},
+		SerialNumber:       big.NewInt(0x0FA3),
+		SignatureAlgorithm: x509.SHA256WithRSA,
+		NotBefore:          time.Now().Add(-24 * time.Hour),
+		NotAfter:           time.Now().Add(30 * 24 * time.Hour),
+	}
+	info := &CertInfo{Cert: cert, UsedIP: "192.0.2.1", Verified: true, ChainErr: nil}
+
+	printer := &CertificatePrinterImpl{}
+	out := captureStdout(t, func() { printer.Print(info, false) })
+
+	for _, want := range []string{
+		"Certificate for example.com",
+		"SANs: example.com, www.example.com",
+		"Serial: 0F:A3",
+		"Signature: SHA256-RSA",
+		"Used IP address: 192.0.2.1",
+		"Chain: VALID",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected output to contain %q, got:\n%s", want, out)
+		}
+	}
+}
+
+// TestCertificatePrinter_Print_Short verifies short mode prints only the days remaining.
+func TestCertificatePrinter_Print_Short(t *testing.T) {
+	cert := &x509.Certificate{NotAfter: time.Now().Add(30 * 24 * time.Hour)}
+	info := &CertInfo{Cert: cert}
+
+	printer := &CertificatePrinterImpl{}
+	out := captureStdout(t, func() { printer.Print(info, true) })
+
+	if strings.Contains(out, "Certificate for") {
+		t.Errorf("short output should not contain full details, got:\n%s", out)
+	}
+	if strings.TrimSpace(out) == "" {
+		t.Error("expected short output to contain days remaining")
+	}
+}
+
+// TestCertificatePrinter_Print_FileChainOmitted verifies that for a file-loaded
+// certificate neither the used IP nor the chain status are printed.
+func TestCertificatePrinter_Print_FileChainOmitted(t *testing.T) {
+	cert := &x509.Certificate{
+		Subject:      pkix.Name{CommonName: "file.example"},
+		SerialNumber: big.NewInt(1),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	info := &CertInfo{Cert: cert, FromFile: true}
+
+	printer := &CertificatePrinterImpl{}
+	out := captureStdout(t, func() { printer.Print(info, false) })
+
+	if strings.Contains(out, "Used IP address") {
+		t.Errorf("file-loaded cert should not print used IP, got:\n%s", out)
+	}
+	if strings.Contains(out, "Chain:") {
+		t.Errorf("file-loaded cert should not print chain status, got:\n%s", out)
 	}
 }
