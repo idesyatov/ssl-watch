@@ -36,6 +36,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Validate the requested output format
+	if cfg.Output != "text" && cfg.Output != "json" {
+		fmt.Fprintf(os.Stderr, "Error: invalid -output %q (expected \"text\" or \"json\")\n\n", cfg.Output)
+		parser.PrintDefaults()
+		os.Exit(1)
+	}
+
 	var info *cert.CertInfo // Variable to hold the retrieved certificate information
 	var err error           // Variable to hold any error that occurs
 
@@ -58,5 +65,33 @@ func main() {
 	}
 
 	// Print the certificate information
-	printer.Print(info, cfg.Short)
+	printer.Print(info, cert.PrintOptions{
+		Short:     cfg.Short,
+		JSON:      cfg.Output == "json",
+		Threshold: cfg.Threshold,
+		Color:     useColor(cfg),
+	})
+
+	// Exit code 2 when the certificate expires within the configured threshold,
+	// so the tool can drive alerts in cron/CI.
+	if cfg.Threshold > 0 && cert.DaysUntilExpiry(info.Cert) < cfg.Threshold {
+		os.Exit(2)
+	}
+}
+
+// useColor reports whether the human-readable output should be colorized:
+// only for plain text output to an interactive terminal, and never when the
+// NO_COLOR environment variable is set.
+func useColor(cfg flags.Config) bool {
+	if cfg.Output != "text" || cfg.Short {
+		return false
+	}
+	if os.Getenv("NO_COLOR") != "" {
+		return false
+	}
+	fi, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }

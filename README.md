@@ -8,6 +8,8 @@ To use ssl-watch, you need to specify either the domain you want to check or the
 
 By default the certificate chain of a fetched certificate is verified against the system root store (trust, hostname and validity period). The result is reported as `Chain: VALID` or `Chain: INVALID (reason)`. Use `-insecure` to skip this check (e.g. for self-signed certificates). Chain verification is not performed for certificates loaded from a file.
 
+For monitoring (cron/CI), use `-threshold` to make the tool exit with code `2` when the certificate is close to expiry (see [Exit codes](#exit-codes)), and `-output json` for machine-readable output.
+
 ### Command Line Arguments
 
 - `-domain <domain>`: The domain to check (required if `-certfile` is not specified).
@@ -16,6 +18,10 @@ By default the certificate chain of a fetched certificate is verified against th
 - `-ipaddr <ipaddr>`: The IP address to connect to (optional).
 - `-short`: Output only the number of days remaining until certificate expiration (optional).
 - `-insecure`: Skip certificate chain verification (optional).
+- `-threshold <days>`: Exit with code `2` when the days remaining is below this value; `0` disables (optional).
+- `-output <text|json>`: Output format (default `text`).
+
+In text mode, when writing to an interactive terminal, the days-remaining value and the chain status are colorized (red/yellow/green). Color is disabled automatically when output is piped/redirected or when the `NO_COLOR` environment variable is set.
 
 ### Examples
 
@@ -43,6 +49,12 @@ ssl-watch -domain example.com -port 8443 -ipaddr 192.0.2.1
 
 # Check a domain with a self-signed certificate, skipping chain verification
 ssl-watch -domain self-signed.example.com -insecure
+
+# Monitoring: exit code 2 if the certificate expires within 30 days
+ssl-watch -domain example.com -threshold 30 -short
+
+# Machine-readable JSON output
+ssl-watch -domain example.com -output json
 ```
 
 ### Sample output
@@ -60,6 +72,36 @@ Days remaining: 45
 Used IP address: 140.82.121.4
 Chain: VALID
 ```
+
+### JSON output
+
+```bash
+ssl-watch -domain github.com -output json
+```
+
+```json
+{
+  "common_name": "github.com",
+  "subject": "CN=github.com",
+  "issuer": "CN=Sectigo Public Server Authentication CA DV E36,O=Sectigo Limited,C=GB",
+  "sans": ["github.com", "www.github.com"],
+  "serial": "E7:CE:CC:3B:13:FB:3B:7B:8A:46:EA:8C:D0:AE:B7:1C",
+  "signature_algorithm": "ECDSA-SHA256",
+  "not_before": "2026-05-05T00:00:00Z",
+  "not_after": "2026-08-02T23:59:59Z",
+  "days_remaining": 45,
+  "used_ip": "140.82.121.4",
+  "chain_valid": true
+}
+```
+
+The `chain_valid` and `chain_error` fields are omitted for certificates loaded from a file and when `-insecure` is used.
+
+### Exit codes
+
+- `0`: success — certificate retrieved (and, with `-threshold`, days remaining is at or above the threshold).
+- `2`: the certificate expires within `-threshold` days.
+- `1`: an error occurred (connection failure, parse error, invalid arguments).
 
 ## Installation
 

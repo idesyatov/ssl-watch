@@ -5,6 +5,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"io"
 	"math/big"
@@ -134,7 +135,7 @@ func TestCertificatePrinter_Print(t *testing.T) {
 	info := &CertInfo{Cert: cert, UsedIP: "192.0.2.1", Verified: true, ChainErr: nil}
 
 	printer := &CertificatePrinterImpl{}
-	out := captureStdout(t, func() { printer.Print(info, false) })
+	out := captureStdout(t, func() { printer.Print(info, PrintOptions{}) })
 
 	for _, want := range []string{
 		"Certificate for example.com",
@@ -156,7 +157,7 @@ func TestCertificatePrinter_Print_Short(t *testing.T) {
 	info := &CertInfo{Cert: cert}
 
 	printer := &CertificatePrinterImpl{}
-	out := captureStdout(t, func() { printer.Print(info, true) })
+	out := captureStdout(t, func() { printer.Print(info, PrintOptions{Short: true}) })
 
 	if strings.Contains(out, "Certificate for") {
 		t.Errorf("short output should not contain full details, got:\n%s", out)
@@ -177,12 +178,85 @@ func TestCertificatePrinter_Print_FileChainOmitted(t *testing.T) {
 	info := &CertInfo{Cert: cert, FromFile: true}
 
 	printer := &CertificatePrinterImpl{}
-	out := captureStdout(t, func() { printer.Print(info, false) })
+	out := captureStdout(t, func() { printer.Print(info, PrintOptions{}) })
 
 	if strings.Contains(out, "Used IP address") {
 		t.Errorf("file-loaded cert should not print used IP, got:\n%s", out)
 	}
 	if strings.Contains(out, "Chain:") {
 		t.Errorf("file-loaded cert should not print chain status, got:\n%s", out)
+	}
+}
+
+// TestDaysUntilExpiry verifies the day arithmetic for future and past expiry.
+func TestDaysUntilExpiry(t *testing.T) {
+	future := &x509.Certificate{NotAfter: time.Now().Add(10*24*time.Hour + time.Hour)}
+	if got := DaysUntilExpiry(future); got != 10 {
+		t.Errorf("expected 10 days remaining, got %d", got)
+	}
+	past := &x509.Certificate{NotAfter: time.Now().Add(-2 * 24 * time.Hour)}
+	if got := DaysUntilExpiry(past); got >= 0 {
+		t.Errorf("expected negative days for expired cert, got %d", got)
+	}
+}
+
+// TestCertificatePrinter_Print_JSON verifies the JSON output is valid and carries
+// the expected fields.
+func TestCertificatePrinter_Print_JSON(t *testing.T) {
+	cert := &x509.Certificate{
+		Subject:            pkix.Name{CommonName: "json.example"},
+		DNSNames:           []string{"json.example"},
+		SerialNumber:       big.NewInt(0x0FA3),
+		SignatureAlgorithm: x509.SHA256WithRSA,
+		NotBefore:          time.Now().Add(-24 * time.Hour),
+		NotAfter:           time.Now().Add(10 * 24 * time.Hour),
+	}
+	info := &CertInfo{Cert: cert, UsedIP: "192.0.2.1", Verified: true, ChainErr: nil}
+
+	printer := &CertificatePrinterImpl{}
+	out := captureStdout(t, func() { printer.Print(info, PrintOptions{JSON: true}) })
+
+	var got struct {
+		CommonName    string   `json:"common_name"`
+		SANs          []string `json:"sans"`
+		Serial        string   `json:"serial"`
+		DaysRemaining int      `json:"days_remaining"`
+		UsedIP        string   `json:"used_ip"`
+		ChainValid    *bool    `json:"chain_valid"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("output is not valid JSON: %v\noutput:\n%s", err, out)
+	}
+	if got.CommonName != "json.example" {
+		t.Errorf("expected common_name 'json.example', got '%s'", got.CommonName)
+	}
+	if got.Serial != "0F:A3" {
+		t.Errorf("expected serial '0F:A3', got '%s'", got.Serial)
+	}
+	if got.UsedIP != "192.0.2.1" {
+		t.Errorf("expected used_ip '192.0.2.1', got '%s'", got.UsedIP)
+	}
+	if got.ChainValid == nil || !*got.ChainValid {
+		t.Errorf("expected chain_valid true, got %v", got.ChainValid)
+	}
+}
+
+// TestCertificatePrinter_Print_ColorThreshold verifies the days-remaining value is
+// colorized (yellow) when below the threshold.
+func TestCertificatePrinter_Print_ColorThreshold(t *testing.T) {
+	cert := &x509.Certificate{
+		Subject:      pkix.Name{CommonName: "soon.example"},
+		SerialNumber: big.NewInt(1),
+		NotAfter:     time.Now().Add(5 * 24 * time.Hour),
+	}
+	info := &CertInfo{Cert: cert}
+
+	printer := &CertificatePrinterImpl{}
+	out := captureStdout(t, func() {
+		printer.Print(info, PrintOptions{Threshold: 30, Color: true})
+	})
+
+	if !strings.Contains(out, colorYellow) {
+		t.Errorf("expected yellow highlight for days below threshold, got:\n%q", out)
 	}
 }
