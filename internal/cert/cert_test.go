@@ -1,8 +1,14 @@
 package cert
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -124,5 +130,66 @@ func TestCertificatePrinter_Print(t *testing.T) {
 	// Validate that the short flag is false
 	if printer.Short {
 		t.Error("expected short to be false") // Ensure that the short flag is set correctly
+	}
+}
+
+// TestCertificateLoaderImpl_Load tests the real Load implementation by generating
+// a self-signed certificate, writing it to a PEM file, and loading it back.
+func TestCertificateLoaderImpl_Load(t *testing.T) {
+	// Generate a private key for the self-signed certificate
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	// Build a minimal certificate template
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "load-test.example"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+
+	// Create the DER-encoded self-signed certificate
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("failed to create certificate: %v", err)
+	}
+
+	// Write the certificate to a temporary PEM file
+	certPath := filepath.Join(t.TempDir(), "cert.pem")
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	if err := os.WriteFile(certPath, pemBytes, 0o600); err != nil {
+		t.Fatalf("failed to write cert file: %v", err)
+	}
+
+	// Load the certificate using the real implementation
+	loader := &CertificateLoaderImpl{}
+	cert, err := loader.Load(certPath)
+	if err != nil {
+		t.Fatalf("unexpected error loading certificate: %v", err)
+	}
+	if cert.Subject.CommonName != "load-test.example" {
+		t.Errorf("expected CommonName 'load-test.example', got '%s'", cert.Subject.CommonName)
+	}
+}
+
+// TestCertificateLoaderImpl_Load_Errors verifies Load returns errors for a missing
+// file and for a file that does not contain a valid PEM certificate.
+func TestCertificateLoaderImpl_Load_Errors(t *testing.T) {
+	loader := &CertificateLoaderImpl{}
+
+	// Missing file should return an error
+	if _, err := loader.Load(filepath.Join(t.TempDir(), "nope.pem")); err == nil {
+		t.Error("expected error for missing file, got nil")
+	}
+
+	// File with non-PEM content should return an error
+	badPath := filepath.Join(t.TempDir(), "bad.pem")
+	if err := os.WriteFile(badPath, []byte("not a certificate"), 0o600); err != nil {
+		t.Fatalf("failed to write bad file: %v", err)
+	}
+	if _, err := loader.Load(badPath); err == nil {
+		t.Error("expected error for invalid PEM content, got nil")
 	}
 }
