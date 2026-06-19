@@ -109,6 +109,10 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: -all-ips cannot be combined with -ipaddr\n\n")
 			parser.Usage()
 			os.Exit(1)
+		case cfg.Short:
+			fmt.Fprintf(os.Stderr, "Error: -all-ips cannot be combined with -short\n\n")
+			parser.Usage()
+			os.Exit(1)
 		case len(domains) != 1:
 			fmt.Fprintf(os.Stderr, "Error: -all-ips requires exactly one domain\n\n")
 			parser.Usage()
