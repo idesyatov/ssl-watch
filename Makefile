@@ -7,8 +7,13 @@ BUILD_DIR = ./bin
 GO_FILES = $(wildcard $(SOURCE_DIR)/*.go)
 BIN_FILE = $(BUILD_DIR)/$(BINARY_NAME)
 
+# Containerized toolchain — Go is not required locally; these run in Docker.
+GO_IMAGE ?= golang:1.23
+LINT_IMAGE ?= golangci/golangci-lint:latest
+DOCKER_RUN = docker run --rm -v "$(CURDIR)":/app -w /app
+
 # Default target
-.PHONY: all format test build clean
+.PHONY: all format test build clean test-docker build-docker lint-docker
 all: format test build
 
 # Format the Go files
@@ -26,6 +31,21 @@ build: $(GO_FILES)
 	@echo "Building the binary..."
 	@mkdir -p $(BUILD_DIR)
 	@go build -o $(BIN_FILE) $(SOURCE_DIR) || { echo "Build failed"; exit 1; }
+
+# Run vet and tests inside the Go container (no local Go needed)
+test-docker:
+	@echo "Running vet and tests in $(GO_IMAGE)..."
+	@$(DOCKER_RUN) $(GO_IMAGE) sh -c "go vet ./... && go test ./..."
+
+# Build the binary inside the Go container
+build-docker:
+	@echo "Building the binary in $(GO_IMAGE)..."
+	@$(DOCKER_RUN) $(GO_IMAGE) go build -o $(BIN_FILE) $(SOURCE_DIR)
+
+# Lint inside the golangci-lint container
+lint-docker:
+	@echo "Linting in $(LINT_IMAGE)..."
+	@$(DOCKER_RUN) $(LINT_IMAGE) golangci-lint run ./...
 
 # Clean up build artifacts
 clean:
@@ -64,6 +84,9 @@ help:
 	@echo "  make format        - Format the Go source files according to Go standards"
 	@echo "  make test          - Execute the unit tests for the Go package"
 	@echo "  make build         - Compile the source code into a binary executable"
+	@echo "  make test-docker   - Run vet and tests in the Go container (no local Go needed)"
+	@echo "  make build-docker  - Build the binary in the Go container"
+	@echo "  make lint-docker   - Run golangci-lint in its container"
 	@echo "  make clean         - Remove all generated build artifacts and cached files"
 	@echo "  make release       - Merge SOURCE_BRANCH -> TARGET_BRANCH, tag and push"
 	@echo "                      (example: make release VERSION=v1.0.7)"

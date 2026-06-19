@@ -12,6 +12,9 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,6 +107,58 @@ func TestCertificateLoaderImpl_Load_Errors(t *testing.T) {
 	}
 	if _, err := loader.Load(badPath); err == nil {
 		t.Error("expected error for invalid PEM content, got nil")
+	}
+}
+
+// TestCertificateFetcherImpl_Fetch exercises the real Fetch against an in-process
+// TLS server, covering both the insecure path and chain verification.
+func TestCertificateFetcherImpl_Fetch(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("failed to parse server URL: %v", err)
+	}
+	host, port, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		t.Fatalf("failed to split host/port: %v", err)
+	}
+
+	fetcher := &CertificateFetcherImpl{}
+
+	// Insecure: the certificate is returned and the chain is not verified.
+	info, err := fetcher.Fetch(host, port, "", true, 5*time.Second, "")
+	if err != nil {
+		t.Fatalf("unexpected error from Fetch: %v", err)
+	}
+	if info.Cert == nil {
+		t.Fatal("expected a certificate, got nil")
+	}
+	if info.Cert.SerialNumber.Cmp(srv.Certificate().SerialNumber) != 0 {
+		t.Errorf("fetched certificate serial does not match the server certificate")
+	}
+	if len(info.Chain) == 0 {
+		t.Error("expected the peer chain to be recorded")
+	}
+	if info.UsedIP == "" {
+		t.Error("expected the used IP to be recorded for a fetched certificate")
+	}
+	if info.Verified {
+		t.Error("expected Verified to be false when insecure is true")
+	}
+
+	// Secure: the chain is verified and, for this self-signed test cert against
+	// the system roots, fails — but Fetch still succeeds and records the error.
+	info, err = fetcher.Fetch(host, port, "", false, 5*time.Second, "")
+	if err != nil {
+		t.Fatalf("unexpected error from Fetch (secure): %v", err)
+	}
+	if !info.Verified {
+		t.Error("expected Verified to be true when insecure is false")
+	}
+	if info.ChainErr == nil {
+		t.Error("expected chain verification to fail for the self-signed test certificate")
 	}
 }
 

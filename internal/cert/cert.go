@@ -183,7 +183,7 @@ func dialTLS(address string, timeout time.Duration, starttls string, cfg *tls.Co
 		return nil, fmt.Errorf("failed to connect to %s: %v", address, err)
 	}
 	// Bound the plaintext negotiation and handshake by the same timeout.
-	conn.SetDeadline(time.Now().Add(timeout))
+	_ = conn.SetDeadline(time.Now().Add(timeout))
 	if err := negotiateStartTLS(conn, starttls); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("STARTTLS (%s) failed for %s: %v", starttls, address, err)
@@ -194,7 +194,7 @@ func dialTLS(address string, timeout time.Duration, starttls string, cfg *tls.Co
 		tlsConn.Close()
 		return nil, fmt.Errorf("TLS handshake failed for %s: %v", address, err)
 	}
-	conn.SetDeadline(time.Time{})
+	_ = conn.SetDeadline(time.Time{})
 	return tlsConn, nil
 }
 

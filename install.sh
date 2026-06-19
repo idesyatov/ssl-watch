@@ -18,6 +18,19 @@ BINDIR="${BINDIR:-/usr/local/bin}"
 
 err() { echo "error: $*" >&2; exit 1; }
 
+# sha256_of prints the SHA-256 hex digest of a file using whatever tool is
+# available (sha256sum on Linux, shasum on macOS). Returns non-zero if neither
+# is present.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    return 1
+  fi
+}
+
 # require checks that a tool is available and, if not, prints an actionable
 # install command for the detected package manager before exiting.
 require() {
@@ -74,13 +87,24 @@ ver_no_v="${version#v}"
 
 asset="${BINARY}_${ver_no_v}_${os}_${arch}.tar.gz"
 url="https://github.com/$REPO/releases/download/$version/$asset"
+checksums_url="https://github.com/$REPO/releases/download/$version/checksums.txt"
 
 echo "Installing $BINARY $version ($os/$arch) -> $BINDIR"
 
-# --- download and extract into a temp dir ---
+# --- download into a temp dir ---
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 curl -fsSL "$url" -o "$tmp/$asset" || err "download failed: $url"
+
+# --- verify the SHA-256 checksum before installing ---
+curl -fsSL "$checksums_url" -o "$tmp/checksums.txt" || err "failed to download checksums.txt for verification"
+expected=$(awk -v f="$asset" '$2 == f {print $1}' "$tmp/checksums.txt")
+[ -n "$expected" ] || err "checksum for $asset not found in checksums.txt"
+actual=$(sha256_of "$tmp/$asset") || err "no sha256 tool (sha256sum or shasum) available to verify the download"
+[ "$expected" = "$actual" ] || err "checksum mismatch for $asset (expected $expected, got $actual)"
+echo "Checksum verified (sha256)."
+
+# --- extract ---
 tar -xzf "$tmp/$asset" -C "$tmp" "$BINARY" || err "failed to extract $BINARY from archive"
 
 # --- decide whether sudo is needed ---
