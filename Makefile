@@ -61,20 +61,21 @@ release:
 ifndef VERSION
 	$(error VERSION is not set. Usage: make release VERSION=v1.0.7)
 endif
-	@echo "Releasing $(VERSION): $(SOURCE_BRANCH) -> $(TARGET_BRANCH)"
-	@git diff --quiet && git diff --cached --quiet || { echo "Worktree is dirty. Commit or stash changes first."; exit 1; }
-	@git rev-parse $(VERSION) >/dev/null 2>&1 && { echo "Tag $(VERSION) already exists."; exit 1; } || true
-	@git fetch origin
-	@git checkout $(SOURCE_BRANCH)
-	@git push origin $(SOURCE_BRANCH)
-	@git checkout $(TARGET_BRANCH)
-	@git pull --ff-only origin $(TARGET_BRANCH)
-	@git merge --no-ff $(SOURCE_BRANCH) -m "Merge $(SOURCE_BRANCH) for $(VERSION)"
-	@git push origin $(TARGET_BRANCH)
-	@git tag $(VERSION)
-	@git push origin $(VERSION)
-	@git checkout $(SOURCE_BRANCH)
-	@echo "Done. Watch: https://github.com/idesyatov/ssl-watch/actions"
+	@set -e; \
+	echo "Releasing $(VERSION): $(SOURCE_BRANCH) -> $(TARGET_BRANCH)"; \
+	git diff --quiet && git diff --cached --quiet || { echo "Worktree is dirty. Commit or stash changes first."; exit 1; }; \
+	git rev-parse $(VERSION) >/dev/null 2>&1 && { echo "Tag $(VERSION) already exists."; exit 1; } || true; \
+	git fetch origin; \
+	trap 'git checkout $(SOURCE_BRANCH) >/dev/null 2>&1 || true' EXIT INT TERM; \
+	git checkout $(SOURCE_BRANCH); \
+	git push origin $(SOURCE_BRANCH); \
+	git checkout $(TARGET_BRANCH); \
+	git pull --ff-only origin $(TARGET_BRANCH); \
+	git merge --no-ff $(SOURCE_BRANCH) -m "Merge $(SOURCE_BRANCH) for $(VERSION)"; \
+	git push origin $(TARGET_BRANCH); \
+	git tag $(VERSION); \
+	git push origin $(VERSION); \
+	echo "Done. Watch: https://github.com/idesyatov/ssl-watch/actions"
 
 # Help
 help:

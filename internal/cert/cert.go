@@ -2,6 +2,9 @@ package cert
 
 import (
 	"bufio"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -17,12 +20,14 @@ import (
 // CertInfo aggregates a retrieved certificate together with metadata about how
 // it was obtained and the result of chain verification.
 type CertInfo struct {
-	Cert     *x509.Certificate   // The retrieved certificate (leaf)
-	Chain    []*x509.Certificate // Full peer chain (leaf first); nil when loaded from a file
-	UsedIP   string              // Remote IP address; empty when loaded from a file
-	FromFile bool                // True when the certificate was loaded from a local file
-	Verified bool                // True when chain verification was attempted
-	ChainErr error               // Chain verification error; nil means valid (only meaningful when Verified)
+	Cert        *x509.Certificate   // The retrieved certificate (leaf)
+	Chain       []*x509.Certificate // Full peer chain (leaf first); nil when loaded from a file
+	UsedIP      string              // Remote IP address; empty when loaded from a file
+	TLSVersion  string              // Negotiated TLS version; empty when loaded from a file
+	CipherSuite string              // Negotiated cipher suite; empty when loaded from a file
+	FromFile    bool                // True when the certificate was loaded from a local file
+	Verified    bool                // True when chain verification was attempted
+	ChainErr    error               // Chain verification error; nil means valid (only meaningful when Verified)
 }
 
 // CertificateFetcher defines an interface for fetching certificates from a domain or IP address.
@@ -49,6 +54,7 @@ type PrintOptions struct {
 	JSON      bool // Print machine-readable JSON
 	Threshold int  // Days threshold for the expiry warning highlight (0 = disabled)
 	Color     bool // Colorize the human-readable output
+	Chain     bool // Print every certificate in the chain
 }
 
 // CertificatePrinter defines an interface for printing certificate details.
@@ -107,6 +113,57 @@ func subjectName(c *x509.Certificate) string {
 	return c.Subject.String()
 }
 
+// issuerName returns the issuer's common name, falling back to the full issuer DN.
+func issuerName(c *x509.Certificate) string {
+	if c.Issuer.CommonName != "" {
+		return c.Issuer.CommonName
+	}
+	return c.Issuer.String()
+}
+
+// formatPublicKey describes the certificate's public key as algorithm and size,
+// e.g. "RSA 2048", "ECDSA P-256" or "Ed25519".
+func formatPublicKey(c *x509.Certificate) string {
+	switch pub := c.PublicKey.(type) {
+	case *rsa.PublicKey:
+		return fmt.Sprintf("RSA %d", pub.N.BitLen())
+	case *ecdsa.PublicKey:
+		return fmt.Sprintf("ECDSA %s", pub.Curve.Params().Name)
+	case ed25519.PublicKey:
+		return "Ed25519"
+	default:
+		return c.PublicKeyAlgorithm.String()
+	}
+}
+
+// chainList returns the certificate chain, or a single-element slice with the
+// leaf when no chain is recorded (file load).
+func chainList(info *CertInfo) []*x509.Certificate {
+	if len(info.Chain) > 0 {
+		return info.Chain
+	}
+	return []*x509.Certificate{info.Cert}
+}
+
+// isWeakSignature reports whether the certificate is signed with a broken or
+// deprecated hash (MD2/MD5/SHA-1 family).
+func isWeakSignature(c *x509.Certificate) bool {
+	switch c.SignatureAlgorithm {
+	case x509.MD2WithRSA, x509.MD5WithRSA, x509.SHA1WithRSA, x509.DSAWithSHA1, x509.ECDSAWithSHA1:
+		return true
+	default:
+		return false
+	}
+}
+
+// isWeakKey reports whether the certificate uses an RSA key smaller than 2048 bits.
+func isWeakKey(c *x509.Certificate) bool {
+	if pub, ok := c.PublicKey.(*rsa.PublicKey); ok {
+		return pub.N.BitLen() < 2048
+	}
+	return false
+}
+
 // CertificateFetcherImpl is an implementation of the CertificateFetcher interface.
 // It provides functionality to fetch certificates from a specified domain or IP address.
 type CertificateFetcherImpl struct{}
@@ -131,7 +188,8 @@ func (f *CertificateFetcherImpl) Fetch(domain, port, ipaddr string, insecure boo
 	}
 	defer conn.Close()
 
-	certs := conn.ConnectionState().PeerCertificates
+	state := conn.ConnectionState()
+	certs := state.PeerCertificates
 	if len(certs) == 0 {
 		return nil, fmt.Errorf("no certificates found for %s", address)
 	}
@@ -141,7 +199,13 @@ func (f *CertificateFetcherImpl) Fetch(domain, port, ipaddr string, insecure boo
 		usedIP = tcpAddr.IP.String()
 	}
 
-	info := &CertInfo{Cert: certs[0], Chain: certs, UsedIP: usedIP}
+	info := &CertInfo{
+		Cert:        certs[0],
+		Chain:       certs,
+		UsedIP:      usedIP,
+		TLSVersion:  tls.VersionName(state.Version),
+		CipherSuite: tls.CipherSuiteName(state.CipherSuite),
+	}
 	if !insecure {
 		info.Verified = true
 		info.ChainErr = verifyChain(certs, domain)
@@ -340,7 +404,7 @@ func (p *CertificatePrinterImpl) Print(info *CertInfo, opts PrintOptions) {
 
 	switch {
 	case opts.JSON:
-		p.printJSON(info)
+		p.printJSON(info, opts.Chain)
 	case opts.Short:
 		fmt.Println(days)
 	default:
@@ -363,7 +427,19 @@ func (p *CertificatePrinterImpl) printText(info *CertInfo, days int, opts PrintO
 		fmt.Printf("SANs: %s\n", strings.Join(cert.DNSNames, ", "))
 	}
 	fmt.Printf("Serial: %s\n", formatSerial(cert.SerialNumber))
-	fmt.Printf("Signature: %s\n", cert.SignatureAlgorithm)
+
+	sig := cert.SignatureAlgorithm.String()
+	if isWeakSignature(cert) {
+		sig += maybeColor(" (weak)", colorYellow, opts.Color)
+	}
+	fmt.Printf("Signature: %s\n", sig)
+
+	pubKey := formatPublicKey(cert)
+	if isWeakKey(cert) {
+		pubKey += maybeColor(" (weak)", colorYellow, opts.Color)
+	}
+	fmt.Printf("Public key: %s\n", pubKey)
+
 	fmt.Printf("Valid from: %s\n", cert.NotBefore)
 	fmt.Printf("Expires on: %s\n", cert.NotAfter)
 
@@ -382,6 +458,9 @@ func (p *CertificatePrinterImpl) printText(info *CertInfo, days int, opts PrintO
 
 	if !info.FromFile {
 		fmt.Printf("Used IP address: %s\n", info.UsedIP)
+		if info.TLSVersion != "" {
+			fmt.Printf("TLS: %s (%s)\n", info.TLSVersion, info.CipherSuite)
+		}
 	}
 	if info.Verified {
 		if info.ChainErr == nil {
@@ -404,12 +483,35 @@ func (p *CertificatePrinterImpl) printText(info *CertInfo, days int, opts PrintO
 		}
 		fmt.Println(msg)
 	}
+
+	if opts.Chain {
+		printChainText(info)
+	}
+}
+
+// printChainText prints every certificate in the chain (leaf first), one per
+// line, with its subject, issuer and expiry.
+func printChainText(info *CertInfo) {
+	chain := chainList(info)
+	fmt.Printf("Certificate chain (%d):\n", len(chain))
+	for i, c := range chain {
+		fmt.Printf("  [%d] %s (issued by %s) - expires %s, %d days\n",
+			i, subjectName(c), issuerName(c), c.NotAfter.Format("2006-01-02"), DaysUntilExpiry(c))
+	}
 }
 
 // chainExpiry is the JSON view of an intermediate certificate that expires
 // before the leaf.
 type chainExpiry struct {
 	Subject       string `json:"subject"`
+	DaysRemaining int    `json:"days_remaining"`
+}
+
+// chainCert is the JSON view of a single certificate in the chain.
+type chainCert struct {
+	Subject       string `json:"subject"`
+	Issuer        string `json:"issuer"`
+	NotAfter      string `json:"not_after"`
 	DaysRemaining int    `json:"days_remaining"`
 }
 
@@ -424,18 +526,25 @@ type certPayload struct {
 	SANs          []string     `json:"sans,omitempty"`
 	Serial        string       `json:"serial"`
 	Signature     string       `json:"signature_algorithm"`
+	WeakSignature bool         `json:"weak_signature,omitempty"`
+	PublicKey     string       `json:"public_key"`
+	WeakKey       bool         `json:"weak_key,omitempty"`
 	NotBefore     string       `json:"not_before"`
 	NotAfter      string       `json:"not_after"`
 	DaysRemaining int          `json:"days_remaining"`
 	UsedIP        string       `json:"used_ip,omitempty"`
+	TLSVersion    string       `json:"tls_version,omitempty"`
+	CipherSuite   string       `json:"cipher_suite,omitempty"`
 	ChainValid    *bool        `json:"chain_valid,omitempty"`
 	ChainError    string       `json:"chain_error,omitempty"`
 	ChainExpiry   *chainExpiry `json:"chain_expiry_warning,omitempty"`
+	Chain         []chainCert  `json:"chain,omitempty"`
 }
 
 // buildPayload assembles the JSON view of a certificate, tagged with domain
-// (empty domain is omitted from the output).
-func buildPayload(info *CertInfo, domain string) certPayload {
+// (empty domain is omitted from the output). When includeChain is set, the full
+// chain is added under the "chain" field.
+func buildPayload(info *CertInfo, domain string, includeChain bool) certPayload {
 	cert := info.Cert
 	out := certPayload{
 		Domain:        domain,
@@ -445,10 +554,15 @@ func buildPayload(info *CertInfo, domain string) certPayload {
 		SANs:          cert.DNSNames,
 		Serial:        formatSerial(cert.SerialNumber),
 		Signature:     cert.SignatureAlgorithm.String(),
+		WeakSignature: isWeakSignature(cert),
+		PublicKey:     formatPublicKey(cert),
+		WeakKey:       isWeakKey(cert),
 		NotBefore:     cert.NotBefore.UTC().Format(time.RFC3339),
 		NotAfter:      cert.NotAfter.UTC().Format(time.RFC3339),
 		DaysRemaining: DaysUntilExpiry(cert),
 		UsedIP:        info.UsedIP,
+		TLSVersion:    info.TLSVersion,
+		CipherSuite:   info.CipherSuite,
 	}
 	if info.Verified {
 		valid := info.ChainErr == nil
@@ -460,14 +574,24 @@ func buildPayload(info *CertInfo, domain string) certPayload {
 	if early := earliestExpiringBefore(info.Chain); early != nil {
 		out.ChainExpiry = &chainExpiry{Subject: subjectName(early), DaysRemaining: DaysUntilExpiry(early)}
 	}
+	if includeChain {
+		for _, c := range chainList(info) {
+			out.Chain = append(out.Chain, chainCert{
+				Subject:       subjectName(c),
+				Issuer:        issuerName(c),
+				NotAfter:      c.NotAfter.UTC().Format(time.RFC3339),
+				DaysRemaining: DaysUntilExpiry(c),
+			})
+		}
+	}
 	return out
 }
 
 // Payload returns the JSON-serializable view of a certificate, tagged with the
-// given domain (omitted when empty). Used to assemble the array emitted for
-// multi-domain runs.
-func Payload(info *CertInfo, domain string) any {
-	return buildPayload(info, domain)
+// given domain (omitted when empty). When includeChain is set, the full chain is
+// added. Used to assemble the array emitted for multi-domain runs.
+func Payload(info *CertInfo, domain string, includeChain bool) any {
+	return buildPayload(info, domain, includeChain)
 }
 
 // ErrorPayload returns a JSON-serializable entry describing a domain that could
@@ -480,8 +604,8 @@ func ErrorPayload(domain, errMsg string) any {
 }
 
 // printJSON renders a single certificate as indented JSON.
-func (p *CertificatePrinterImpl) printJSON(info *CertInfo) {
-	b, err := json.MarshalIndent(buildPayload(info, ""), "", "  ")
+func (p *CertificatePrinterImpl) printJSON(info *CertInfo, includeChain bool) {
+	b, err := json.MarshalIndent(buildPayload(info, "", includeChain), "", "  ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to encode JSON: %v\n", err)
 		return

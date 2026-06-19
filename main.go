@@ -103,6 +103,7 @@ func main() {
 		JSON:      cfg.Output == "json",
 		Threshold: cfg.Threshold,
 		Color:     useColor(cfg),
+		Chain:     cfg.Chain,
 	}
 	timeout := time.Duration(cfg.Timeout) * time.Second
 
@@ -166,7 +167,7 @@ func runBatch(fetcher cert.CertificateFetcher, printer cert.CertificatePrinter, 
 		}
 
 		if opts.JSON {
-			entries = append(entries, cert.Payload(info, d))
+			entries = append(entries, cert.Payload(info, d, opts.Chain))
 		} else {
 			if printedText && !cfg.Short {
 				fmt.Println()

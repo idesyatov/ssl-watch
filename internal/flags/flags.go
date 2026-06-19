@@ -25,6 +25,7 @@ type Config struct {
 	Insecure    bool   // Skip certificate chain verification
 	Threshold   int    // Expiry warning threshold in days (0 = disabled); drives exit code 2
 	Output      string // Output format: "text" or "json"
+	Chain       bool   // Print every certificate in the chain
 	Timeout     int    // Connection timeout in seconds for fetching a remote certificate
 	StartTLS    string // STARTTLS protocol to upgrade the connection: smtp/imap/pop3/ftp (empty = direct TLS)
 	ShowVersion bool   // Show version and exit
@@ -57,6 +58,7 @@ type DefaultFlagParser struct {
 	insecure    *bool
 	threshold   *int
 	output      *string
+	chain       *bool
 	timeout     *int
 	starttls    *string
 	showVersion *bool
@@ -76,6 +78,7 @@ func (d *DefaultFlagParser) Parse() Config {
 		Insecure:    *d.insecure,
 		Threshold:   *d.threshold,
 		Output:      *d.output,
+		Chain:       *d.chain,
 		Timeout:     *d.timeout,
 		StartTLS:    *d.starttls,
 		ShowVersion: *d.showVersion,
@@ -107,23 +110,59 @@ func NewDefaultFlagParser() FlagParser {
 		insecure:    fs.Bool("insecure", false, "Skip certificate chain verification"),
 		threshold:   fs.Int("threshold", 0, "Warn (exit code 2) when days remaining is below this value (0 disables)"),
 		output:      fs.String("output", "text", "Output format: text or json"),
+		chain:       fs.Bool("chain", false, "Print every certificate in the chain"),
 		timeout:     fs.Int("timeout", 10, "Connection timeout in seconds when fetching a remote certificate"),
 		starttls:    fs.String("starttls", "", "Upgrade the connection via STARTTLS: smtp, imap, pop3 or ftp (default: direct TLS)"),
 		showVersion: fs.Bool("version", false, "Show version"),
 	}
 
-	// Custom usage header: description, examples and the project link, then flags.
+	// Custom usage: description, examples, the project link and flags grouped by
+	// purpose for readability.
 	fs.Usage = func() {
 		out := fs.Output()
+
+		// flagLine prints one flag as "-name  usage (default ...)", omitting the
+		// default when it is the zero value (matching flag.PrintDefaults).
+		flagLine := func(name string) {
+			f := fs.Lookup(name)
+			if f == nil {
+				return
+			}
+			line := fmt.Sprintf("  -%-12s %s", f.Name, f.Usage)
+			if f.DefValue != "" && f.DefValue != "false" && f.DefValue != "0" {
+				line += fmt.Sprintf(" (default %s)", f.DefValue)
+			}
+			fmt.Fprintln(out, line)
+		}
+
 		fmt.Fprintf(out, "%s - %s\n\n", appName, appShortDesc)
 		fmt.Fprintf(out, "Usage:\n")
 		fmt.Fprintf(out, "  %s -domain example.com\n", appName)
 		fmt.Fprintf(out, "  %s -domain a.com,b.com\n", appName)
 		fmt.Fprintf(out, "  %s -domain-file domains.txt\n", appName)
+		fmt.Fprintf(out, "  %s -domain smtp.example.com -starttls smtp\n", appName)
+		fmt.Fprintf(out, "  %s -domain example.com -chain\n", appName)
 		fmt.Fprintf(out, "  %s -certfile /path/to/cert.crt\n\n", appName)
 		fmt.Fprintf(out, "GitHub: %s\n\n", GitURL)
-		fmt.Fprintf(out, "Flags:\n")
-		fs.PrintDefaults()
+
+		fmt.Fprintf(out, "Target:\n")
+		flagLine("domain")
+		flagLine("domain-file")
+		flagLine("certfile")
+		fmt.Fprintf(out, "\nConnection:\n")
+		flagLine("port")
+		flagLine("ipaddr")
+		flagLine("starttls")
+		flagLine("timeout")
+		flagLine("insecure")
+		fmt.Fprintf(out, "\nOutput:\n")
+		flagLine("output")
+		flagLine("short")
+		flagLine("chain")
+		fmt.Fprintf(out, "\nMonitoring:\n")
+		flagLine("threshold")
+		fmt.Fprintf(out, "\nMisc:\n")
+		flagLine("version")
 	}
 
 	return p

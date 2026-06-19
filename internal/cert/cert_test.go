@@ -2,6 +2,9 @@ package cert
 
 import (
 	"bufio"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -227,6 +230,170 @@ func TestNegotiateStartTLS_Unknown(t *testing.T) {
 	defer client.Close()
 	if err := negotiateStartTLS(client, "gopher"); err == nil {
 		t.Error("expected error for unknown protocol, got nil")
+	}
+}
+
+// TestFormatPublicKey verifies the algorithm/size rendering for RSA, ECDSA and
+// Ed25519 keys.
+func TestFormatPublicKey(t *testing.T) {
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa key: %v", err)
+	}
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ecdsa key: %v", err)
+	}
+	edPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("ed25519 key: %v", err)
+	}
+
+	cases := []struct {
+		pub  any
+		want string
+	}{
+		{&rsaKey.PublicKey, "RSA 2048"},
+		{&ecKey.PublicKey, "ECDSA P-256"},
+		{edPub, "Ed25519"},
+	}
+	for _, c := range cases {
+		if got := formatPublicKey(&x509.Certificate{PublicKey: c.pub}); got != c.want {
+			t.Errorf("formatPublicKey = %q, want %q", got, c.want)
+		}
+	}
+}
+
+// TestWeakCrypto verifies weak signature and weak RSA key detection.
+func TestWeakCrypto(t *testing.T) {
+	if !isWeakSignature(&x509.Certificate{SignatureAlgorithm: x509.SHA1WithRSA}) {
+		t.Error("SHA1WithRSA should be flagged as weak")
+	}
+	if isWeakSignature(&x509.Certificate{SignatureAlgorithm: x509.SHA256WithRSA}) {
+		t.Error("SHA256WithRSA should not be flagged as weak")
+	}
+
+	weak, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("weak rsa key: %v", err)
+	}
+	if !isWeakKey(&x509.Certificate{PublicKey: &weak.PublicKey}) {
+		t.Error("RSA 1024 should be flagged as a weak key")
+	}
+	strong, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("strong rsa key: %v", err)
+	}
+	if isWeakKey(&x509.Certificate{PublicKey: &strong.PublicKey}) {
+		t.Error("RSA 2048 should not be flagged as a weak key")
+	}
+}
+
+// TestPrint_KeyAndTLS verifies the public key and TLS connection lines appear in
+// the human-readable output.
+func TestPrint_KeyAndTLS(t *testing.T) {
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa key: %v", err)
+	}
+	cert := &x509.Certificate{
+		Subject:            pkix.Name{CommonName: "example.com"},
+		SerialNumber:       big.NewInt(1),
+		SignatureAlgorithm: x509.SHA256WithRSA,
+		PublicKey:          &rsaKey.PublicKey,
+		NotAfter:           time.Now().Add(30 * 24 * time.Hour),
+	}
+	info := &CertInfo{Cert: cert, UsedIP: "192.0.2.1", TLSVersion: "TLS 1.3", CipherSuite: "TLS_AES_128_GCM_SHA256"}
+
+	out := captureStdout(t, func() { (&CertificatePrinterImpl{}).Print(info, PrintOptions{}) })
+	for _, want := range []string{"Public key: RSA 2048", "TLS: TLS 1.3 (TLS_AES_128_GCM_SHA256)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected output to contain %q, got:\n%s", want, out)
+		}
+	}
+}
+
+// TestPrint_WeakMarkers verifies the "(weak)" marker on a SHA-1, RSA-1024 cert.
+func TestPrint_WeakMarkers(t *testing.T) {
+	weak, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("weak rsa key: %v", err)
+	}
+	cert := &x509.Certificate{
+		Subject:            pkix.Name{CommonName: "old.example"},
+		SerialNumber:       big.NewInt(1),
+		SignatureAlgorithm: x509.SHA1WithRSA,
+		PublicKey:          &weak.PublicKey,
+		NotAfter:           time.Now().Add(30 * 24 * time.Hour),
+	}
+	info := &CertInfo{Cert: cert, FromFile: true}
+
+	out := captureStdout(t, func() { (&CertificatePrinterImpl{}).Print(info, PrintOptions{}) })
+	if !strings.Contains(out, "Public key: RSA 1024 (weak)") {
+		t.Errorf("expected weak key marker, got:\n%s", out)
+	}
+	if !strings.Contains(out, "(weak)") || !strings.Contains(out, "Signature:") {
+		t.Errorf("expected weak signature marker, got:\n%s", out)
+	}
+}
+
+// TestPrint_Chain verifies the -chain text block and JSON array.
+func TestPrint_Chain(t *testing.T) {
+	leaf := &x509.Certificate{
+		Subject:      pkix.Name{CommonName: "leaf.example"},
+		Issuer:       pkix.Name{CommonName: "Intermediate CA"},
+		SerialNumber: big.NewInt(1),
+		NotAfter:     time.Now().Add(60 * 24 * time.Hour),
+	}
+	inter := &x509.Certificate{
+		Subject:      pkix.Name{CommonName: "Intermediate CA"},
+		Issuer:       pkix.Name{CommonName: "Root CA"},
+		SerialNumber: big.NewInt(2),
+		NotAfter:     time.Now().Add(400 * 24 * time.Hour),
+	}
+	info := &CertInfo{Cert: leaf, Chain: []*x509.Certificate{leaf, inter}, UsedIP: "192.0.2.1"}
+	printer := &CertificatePrinterImpl{}
+
+	// Text
+	out := captureStdout(t, func() { printer.Print(info, PrintOptions{Chain: true}) })
+	for _, want := range []string{"Certificate chain (2):", "[0] leaf.example (issued by Intermediate CA)", "[1] Intermediate CA (issued by Root CA)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected chain output to contain %q, got:\n%s", want, out)
+		}
+	}
+
+	// JSON
+	out = captureStdout(t, func() { printer.Print(info, PrintOptions{JSON: true, Chain: true}) })
+	var got struct {
+		Chain []struct {
+			Subject       string `json:"subject"`
+			Issuer        string `json:"issuer"`
+			DaysRemaining int    `json:"days_remaining"`
+		} `json:"chain"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	if len(got.Chain) != 2 {
+		t.Fatalf("expected 2 chain entries, got %d:\n%s", len(got.Chain), out)
+	}
+	if got.Chain[0].Subject != "leaf.example" || got.Chain[1].Issuer != "Root CA" {
+		t.Errorf("unexpected chain entries: %+v", got.Chain)
+	}
+}
+
+// TestPrint_Chain_OmittedByDefault verifies the chain field is absent without -chain.
+func TestPrint_Chain_OmittedByDefault(t *testing.T) {
+	cert := &x509.Certificate{
+		Subject:      pkix.Name{CommonName: "leaf.example"},
+		SerialNumber: big.NewInt(1),
+		NotAfter:     time.Now().Add(60 * 24 * time.Hour),
+	}
+	info := &CertInfo{Cert: cert, Chain: []*x509.Certificate{cert}}
+
+	out := captureStdout(t, func() { (&CertificatePrinterImpl{}).Print(info, PrintOptions{JSON: true}) })
+	if strings.Contains(out, "\"chain\"") {
+		t.Errorf("did not expect a chain field without -chain, got:\n%s", out)
 	}
 }
 
