@@ -8,6 +8,8 @@ To use ssl-watch, you need to specify either the domain you want to check or the
 
 By default the certificate chain of a fetched certificate is verified against the system root store (trust, hostname and validity period). The result is reported as `Chain: VALID` or `Chain: INVALID (reason)`. Use `-insecure` to skip this check (e.g. for self-signed certificates). Chain verification is not performed for certificates loaded from a file.
 
+The whole chain is also checked for expiry: if an intermediate certificate expires *before* the leaf, a `WARNING: intermediate "..." expires in N days, before the leaf` line is printed (and a `chain_expiry_warning` object is added to the JSON output). With `-threshold`, the exit code is driven by the weakest link in the chain, not the leaf alone.
+
 For monitoring (cron/CI), use `-threshold` to make the tool exit with code `2` when the certificate is close to expiry (see [Exit codes](#exit-codes)), and `-output json` for machine-readable output.
 
 ### Command Line Arguments
@@ -95,12 +97,12 @@ ssl-watch -domain github.com -output json
 }
 ```
 
-The `chain_valid` and `chain_error` fields are omitted for certificates loaded from a file and when `-insecure` is used.
+The `chain_valid` and `chain_error` fields are omitted for certificates loaded from a file and when `-insecure` is used. The `chain_expiry_warning` object (`{"subject": ..., "days_remaining": ...}`) is present only when an intermediate certificate expires before the leaf.
 
 ### Exit codes
 
-- `0`: success — certificate retrieved (and, with `-threshold`, days remaining is at or above the threshold).
-- `2`: the certificate expires within `-threshold` days.
+- `0`: success — certificate retrieved (and, with `-threshold`, days remaining is at or above the threshold for every certificate in the chain).
+- `2`: a certificate in the chain (leaf or an intermediate) expires within `-threshold` days.
 - `1`: an error occurred (connection failure, parse error, invalid arguments).
 
 ## Installation
