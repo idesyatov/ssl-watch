@@ -1,0 +1,18 @@
+# Normalize line endings: text files are stored and checked out with LF,
+# including on Windows, to keep gofmt and diffs clean.
+* text=auto eol=lf
+
+# Explicit rules for our sources and config (defensive).
+*.go     text eol=lf
+*.sh     text eol=lf
+*.md     text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+Makefile text eol=lf
+go.mod   text eol=lf
+go.sum   text eol=lf
+
+# Treat archives and images as binary so git never rewrites them.
+*.gz  binary
+*.zip binary
+*.png binary

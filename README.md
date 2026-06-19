@@ -134,7 +134,8 @@ When several domains are checked, the codes are aggregated: `1` if any domain fa
 ### Install script (Linux & macOS)
 
 The fastest way — one command that detects your OS, architecture and the latest
-release automatically, then installs the binary to `/usr/local/bin`:
+release automatically, verifies the archive's SHA-256 checksum, then installs the
+binary to `/usr/local/bin`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/idesyatov/ssl-watch/master/install.sh | sh

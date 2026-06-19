@@ -64,7 +64,8 @@ type DefaultFlagParser struct {
 
 // Parse processes the command-line flags and returns the parsed configuration.
 func (d *DefaultFlagParser) Parse() Config {
-	d.fs.Parse(os.Args[1:])
+	// flag.ExitOnError makes Parse exit on error rather than return one.
+	_ = d.fs.Parse(os.Args[1:])
 	return Config{
 		Domain:      *d.domain,
 		DomainFile:  *d.domainFile,

@@ -1,0 +1,13 @@
+version: "2"
+
+linters:
+  default: standard
+  exclusions:
+    presets:
+      # Don't flag deliberately ignored errors on fmt.Fprint*, *.Close, etc.
+      - std-error-handling
+    rules:
+      # Tests script in-memory servers where ignoring I/O errors is fine.
+      - path: _test\.go
+        linters:
+          - errcheck
