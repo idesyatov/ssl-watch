@@ -70,9 +70,10 @@ func main() {
 		Color:     useColor(cfg),
 	})
 
-	// Exit code 2 when the certificate expires within the configured threshold,
-	// so the tool can drive alerts in cron/CI.
-	if cfg.Threshold > 0 && cert.DaysUntilExpiry(info.Cert) < cfg.Threshold {
+	// Exit code 2 when any certificate in the chain (leaf or an intermediate)
+	// expires within the configured threshold, so the tool can drive alerts in
+	// cron/CI off the weakest link.
+	if cfg.Threshold > 0 && info.MinDaysUntilExpiry() < cfg.Threshold {
 		os.Exit(2)
 	}
 }

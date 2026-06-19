@@ -241,6 +241,93 @@ func TestCertificatePrinter_Print_JSON(t *testing.T) {
 	}
 }
 
+// TestMinDaysUntilExpiry verifies the minimum is taken across the whole chain
+// and falls back to the leaf when no chain is recorded.
+func TestMinDaysUntilExpiry(t *testing.T) {
+	leaf := &x509.Certificate{NotAfter: time.Now().Add(90*24*time.Hour + time.Hour)}
+	inter := &x509.Certificate{NotAfter: time.Now().Add(20*24*time.Hour + time.Hour)}
+
+	withChain := &CertInfo{Cert: leaf, Chain: []*x509.Certificate{leaf, inter}}
+	if got := withChain.MinDaysUntilExpiry(); got != 20 {
+		t.Errorf("expected min 20 across chain, got %d", got)
+	}
+
+	leafOnly := &CertInfo{Cert: leaf}
+	if got := leafOnly.MinDaysUntilExpiry(); got != 90 {
+		t.Errorf("expected leaf fallback 90, got %d", got)
+	}
+}
+
+// TestCertificatePrinter_Print_ChainExpiryWarning verifies the warning is printed
+// when an intermediate expires before the leaf, and omitted otherwise.
+func TestCertificatePrinter_Print_ChainExpiryWarning(t *testing.T) {
+	leaf := &x509.Certificate{
+		Subject:      pkix.Name{CommonName: "leaf.example"},
+		SerialNumber: big.NewInt(1),
+		NotAfter:     time.Now().Add(90 * 24 * time.Hour),
+	}
+	earlyInter := &x509.Certificate{
+		Subject:  pkix.Name{CommonName: "Early Intermediate CA"},
+		NotAfter: time.Now().Add(20 * 24 * time.Hour),
+	}
+	lateInter := &x509.Certificate{
+		Subject:  pkix.Name{CommonName: "Late Intermediate CA"},
+		NotAfter: time.Now().Add(200 * 24 * time.Hour),
+	}
+
+	printer := &CertificatePrinterImpl{}
+
+	warned := &CertInfo{Cert: leaf, Chain: []*x509.Certificate{leaf, earlyInter}}
+	out := captureStdout(t, func() { printer.Print(warned, PrintOptions{}) })
+	if !strings.Contains(out, "WARNING") || !strings.Contains(out, "Early Intermediate CA") {
+		t.Errorf("expected chain expiry warning naming the intermediate, got:\n%s", out)
+	}
+
+	ok := &CertInfo{Cert: leaf, Chain: []*x509.Certificate{leaf, lateInter}}
+	out = captureStdout(t, func() { printer.Print(ok, PrintOptions{}) })
+	if strings.Contains(out, "WARNING") {
+		t.Errorf("did not expect a warning when intermediate outlives leaf, got:\n%s", out)
+	}
+}
+
+// TestCertificatePrinter_Print_JSON_ChainExpiry verifies the chain_expiry_warning
+// object is emitted in JSON when an intermediate expires before the leaf.
+func TestCertificatePrinter_Print_JSON_ChainExpiry(t *testing.T) {
+	leaf := &x509.Certificate{
+		Subject:      pkix.Name{CommonName: "leaf.example"},
+		SerialNumber: big.NewInt(1),
+		NotAfter:     time.Now().Add(90 * 24 * time.Hour),
+	}
+	inter := &x509.Certificate{
+		Subject:      pkix.Name{CommonName: "Early Intermediate CA"},
+		SerialNumber: big.NewInt(2),
+		NotAfter:     time.Now().Add(20*24*time.Hour + time.Hour),
+	}
+	info := &CertInfo{Cert: leaf, Chain: []*x509.Certificate{leaf, inter}}
+
+	printer := &CertificatePrinterImpl{}
+	out := captureStdout(t, func() { printer.Print(info, PrintOptions{JSON: true}) })
+
+	var got struct {
+		ChainExpiry *struct {
+			Subject       string `json:"subject"`
+			DaysRemaining int    `json:"days_remaining"`
+		} `json:"chain_expiry_warning"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("output is not valid JSON: %v\noutput:\n%s", err, out)
+	}
+	if got.ChainExpiry == nil {
+		t.Fatalf("expected chain_expiry_warning in JSON, got:\n%s", out)
+	}
+	if got.ChainExpiry.Subject != "Early Intermediate CA" {
+		t.Errorf("expected subject 'Early Intermediate CA', got '%s'", got.ChainExpiry.Subject)
+	}
+	if got.ChainExpiry.DaysRemaining != 20 {
+		t.Errorf("expected days_remaining 20, got %d", got.ChainExpiry.DaysRemaining)
+	}
+}
+
 // TestCertificatePrinter_Print_ColorThreshold verifies the days-remaining value is
 // colorized (yellow) when below the threshold.
 func TestCertificatePrinter_Print_ColorThreshold(t *testing.T) {
