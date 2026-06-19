@@ -1,15 +1,32 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
 	"github.com/idesyatov/ssl-watch/internal/cert"
 	"github.com/idesyatov/ssl-watch/internal/flags"
 	"github.com/idesyatov/ssl-watch/internal/validation"
+	"io"
 	"log"
 	"os"
+	"strings"
+	"time"
 )
 
 var version = "dev"
+
+// defaultPort mirrors the -port flag default; when -starttls is used and the
+// port was left at this value, the protocol's standard port is substituted.
+const defaultPort = "443"
+
+// starttlsPorts maps each supported STARTTLS protocol to its standard port.
+var starttlsPorts = map[string]string{
+	"smtp": "587",
+	"imap": "143",
+	"pop3": "110",
+	"ftp":  "21",
+}
 
 func main() {
 	// Create a new flag parser to handle command-line arguments
@@ -24,10 +41,17 @@ func main() {
 		return
 	}
 
+	// Resolve the list of domains from -domain (comma-separated) and -domain-file.
+	domains, err := resolveDomains(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Create a new input validator to validate the parsed flags
 	validator := validation.NewDefaultInputValidator()
-	// Validate the domain and certificate file inputs
-	if err := validator.Validate(cfg.Domain, cfg.CertFile); err != nil {
+	// At least one target (a domain or a certificate file) must be specified
+	if err := validator.Validate(strings.Join(domains, ","), cfg.CertFile); err != nil {
 		// If validation fails, report the error, print the usage and exit non-zero
 		fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
 		parser.Usage()
@@ -41,41 +65,198 @@ func main() {
 		os.Exit(1)
 	}
 
-	var info *cert.CertInfo // Variable to hold the retrieved certificate information
-	var err error           // Variable to hold any error that occurs
+	// Validate the connection timeout
+	if cfg.Timeout <= 0 {
+		fmt.Fprintf(os.Stderr, "Error: invalid -timeout %d (expected a positive number of seconds)\n\n", cfg.Timeout)
+		parser.Usage()
+		os.Exit(1)
+	}
+
+	// A fixed IP address makes sense only for a single domain
+	if cfg.IPAddr != "" && len(domains) > 1 {
+		fmt.Fprintf(os.Stderr, "Error: -ipaddr cannot be combined with multiple domains\n\n")
+		parser.Usage()
+		os.Exit(1)
+	}
+
+	// Validate the STARTTLS protocol and pick the protocol's default port when
+	// the port was left at its default.
+	if cfg.StartTLS != "" {
+		port, ok := starttlsPorts[cfg.StartTLS]
+		if !ok {
+			fmt.Fprintf(os.Stderr, "Error: invalid -starttls %q (expected smtp, imap, pop3 or ftp)\n\n", cfg.StartTLS)
+			parser.Usage()
+			os.Exit(1)
+		}
+		if cfg.Port == defaultPort {
+			cfg.Port = port
+		}
+	}
 
 	// Create instances of the certificate fetcher, loader, and printer
 	var fetcher cert.CertificateFetcher = &cert.CertificateFetcherImpl{}
 	var loader cert.CertificateLoader = &cert.CertificateLoaderImpl{}
 	var printer cert.CertificatePrinter = &cert.CertificatePrinterImpl{}
 
-	// If a certificate file is provided, load the certificate from the file
-	if cfg.CertFile != "" {
-		info, err = loader.Load(cfg.CertFile)
-	} else {
-		// Otherwise, fetch the certificate from the specified domain or IP address
-		info, err = fetcher.Fetch(cfg.Domain, cfg.Port, cfg.IPAddr, cfg.Insecure)
-	}
-
-	// Check for errors during certificate retrieval
-	if err != nil {
-		log.Fatalf("Error retrieving certificate: %v", err)
-	}
-
-	// Print the certificate information
-	printer.Print(info, cert.PrintOptions{
+	opts := cert.PrintOptions{
 		Short:     cfg.Short,
 		JSON:      cfg.Output == "json",
 		Threshold: cfg.Threshold,
 		Color:     useColor(cfg),
-	})
+	}
+	timeout := time.Duration(cfg.Timeout) * time.Second
 
+	// Single target — a certificate file or exactly one domain — keeps the
+	// original output format and behavior.
+	if cfg.CertFile != "" {
+		info, err := loader.Load(cfg.CertFile)
+		if err != nil {
+			log.Fatalf("Error retrieving certificate: %v", err)
+		}
+		printSingle(printer, info, cfg, opts)
+		return
+	}
+	if len(domains) == 1 {
+		info, err := fetcher.Fetch(domains[0], cfg.Port, cfg.IPAddr, cfg.Insecure, timeout, cfg.StartTLS)
+		if err != nil {
+			log.Fatalf("Error retrieving certificate: %v", err)
+		}
+		printSingle(printer, info, cfg, opts)
+		return
+	}
+
+	// Multiple domains — mass check with aggregated output and exit code.
+	os.Exit(runBatch(fetcher, printer, domains, cfg, opts, timeout))
+}
+
+// printSingle prints one certificate and exits with code 2 when it expires
+// within the configured threshold.
+func printSingle(printer cert.CertificatePrinter, info *cert.CertInfo, cfg flags.Config, opts cert.PrintOptions) {
+	printer.Print(info, opts)
 	// Exit code 2 when any certificate in the chain (leaf or an intermediate)
 	// expires within the configured threshold, so the tool can drive alerts in
 	// cron/CI off the weakest link.
 	if cfg.Threshold > 0 && info.MinDaysUntilExpiry() < cfg.Threshold {
 		os.Exit(2)
 	}
+}
+
+// runBatch checks every domain in turn and renders the aggregated result. In
+// JSON mode it emits an array (one object per domain, with an "error" entry for
+// failures); in text mode it prints one block per domain, with failures on
+// stderr. It returns the process exit code: 1 if any domain failed to be
+// retrieved, otherwise 2 if any certificate in a chain expires within the
+// threshold, otherwise 0.
+func runBatch(fetcher cert.CertificateFetcher, printer cert.CertificatePrinter, domains []string, cfg flags.Config, opts cert.PrintOptions, timeout time.Duration) int {
+	hadError := false
+	expiring := false
+	printedText := false
+	var entries []any
+
+	for _, d := range domains {
+		info, err := fetcher.Fetch(d, cfg.Port, cfg.IPAddr, cfg.Insecure, timeout, cfg.StartTLS)
+		if err != nil {
+			hadError = true
+			if opts.JSON {
+				entries = append(entries, cert.ErrorPayload(d, err.Error()))
+			} else {
+				fmt.Fprintf(os.Stderr, "Error retrieving certificate for %s: %v\n", d, err)
+			}
+			continue
+		}
+
+		if opts.JSON {
+			entries = append(entries, cert.Payload(info, d))
+		} else {
+			if printedText && !cfg.Short {
+				fmt.Println()
+			}
+			if !cfg.Short {
+				fmt.Printf("==> %s\n", d)
+			}
+			printer.Print(info, opts)
+			printedText = true
+		}
+
+		if cfg.Threshold > 0 && info.MinDaysUntilExpiry() < cfg.Threshold {
+			expiring = true
+		}
+	}
+
+	if opts.JSON {
+		b, err := json.MarshalIndent(entries, "", "  ")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: failed to encode JSON: %v\n", err)
+			return 1
+		}
+		fmt.Println(string(b))
+	}
+
+	switch {
+	case hadError:
+		return 1
+	case expiring:
+		return 2
+	}
+	return 0
+}
+
+// resolveDomains builds the ordered, de-duplicated list of domains from the
+// comma-separated -domain flag and the -domain-file flag (one per line, "-"
+// reads stdin; blank lines and lines starting with "#" are ignored).
+func resolveDomains(cfg flags.Config) ([]string, error) {
+	var out []string
+	seen := make(map[string]bool)
+	add := func(d string) {
+		d = strings.TrimSpace(d)
+		if d == "" || seen[d] {
+			return
+		}
+		seen[d] = true
+		out = append(out, d)
+	}
+
+	for _, d := range strings.Split(cfg.Domain, ",") {
+		add(d)
+	}
+	if cfg.DomainFile != "" {
+		lines, err := readDomainFile(cfg.DomainFile)
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range lines {
+			add(d)
+		}
+	}
+	return out, nil
+}
+
+// readDomainFile reads domains from the given path, one per line, skipping blank
+// lines and lines starting with "#". A path of "-" reads from stdin.
+func readDomainFile(path string) ([]string, error) {
+	var r io.Reader = os.Stdin
+	if path != "-" {
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read domain file %s: %v", path, err)
+		}
+		defer f.Close()
+		r = f
+	}
+
+	var lines []string
+	sc := bufio.NewScanner(r)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read domain file %s: %v", path, err)
+	}
+	return lines, nil
 }
 
 // useColor reports whether the human-readable output should be colorized:

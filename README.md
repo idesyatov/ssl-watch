@@ -1,10 +1,12 @@
 # ssl-watch
 
-ssl-watch is a simple command-line tool to check the SSL certificate of a domain or a local certificate file. It retrieves and displays information about the SSL certificate, including the subject, issuer, SANs, serial number, signature algorithm, validity period, the number of days remaining until expiration, and — for fetched certificates — the verification status of the certificate chain.
+ssl-watch is a simple command-line tool to check the SSL certificate of a domain (or several at once) or a local certificate file. It retrieves and displays information about the SSL certificate, including the subject, issuer, SANs, serial number, signature algorithm, validity period, the number of days remaining until expiration, and — for fetched certificates — the verification status of the certificate chain. It can also reach certificates behind STARTTLS (SMTP/IMAP/POP3/FTP).
 
 ## Usage
 
-To use ssl-watch, you need to specify either the domain you want to check or the path to a local certificate file. You can also optionally specify a port and an IP address. Additionally, you can use the `-short` flag to output only the number of days remaining until the certificate expires.
+To use ssl-watch, you need to specify either the domain(s) you want to check (via `-domain` or `-domain-file`) or the path to a local certificate file. You can also optionally specify a port and an IP address. Additionally, you can use the `-short` flag to output only the number of days remaining until the certificate expires.
+
+Several domains can be checked in one run via a comma-separated `-domain` or a `-domain-file`. In text mode each domain is printed as its own block prefixed with `==> <domain>`; in JSON mode the output becomes an array of objects (one per domain, each tagged with `domain`, and an `{ "domain", "error" }` entry for any that could not be retrieved).
 
 By default the certificate chain of a fetched certificate is verified against the system root store (trust, hostname and validity period). The result is reported as `Chain: VALID` or `Chain: INVALID (reason)`. Use `-insecure` to skip this check (e.g. for self-signed certificates). Chain verification is not performed for certificates loaded from a file.
 
@@ -14,14 +16,17 @@ For monitoring (cron/CI), use `-threshold` to make the tool exit with code `2` w
 
 ### Command Line Arguments
 
-- `-domain <domain>`: The domain to check (required if `-certfile` is not specified).
+- `-domain <domains>`: The domain to check, or several comma-separated (e.g. `a.com,b.com`). Required if `-certfile`/`-domain-file` are not specified.
+- `-domain-file <path>`: Read domains from a file, one per line (`-` reads stdin). Blank lines and lines starting with `#` are ignored.
 - `-certfile <path>`: The path to the local certificate file (required if `-domain` is not specified).
-- `-port <port>`: The port to connect to (default is 443).
-- `-ipaddr <ipaddr>`: The IP address to connect to (optional).
+- `-port <port>`: The port to connect to (default is 443; with `-starttls` the protocol's default port is used unless overridden).
+- `-ipaddr <ipaddr>`: The IP address to connect to (optional; only valid with a single domain).
+- `-starttls <proto>`: Upgrade the connection via STARTTLS before reading the certificate. One of `smtp`, `imap`, `pop3`, `ftp` (default: direct TLS).
 - `-short`: Output only the number of days remaining until certificate expiration (optional).
 - `-insecure`: Skip certificate chain verification (optional).
 - `-threshold <days>`: Exit with code `2` when the days remaining is below this value; `0` disables (optional).
 - `-output <text|json>`: Output format (default `text`).
+- `-timeout <seconds>`: Connection timeout when fetching a remote certificate (default `10`).
 
 In text mode, when writing to an interactive terminal, the days-remaining value and the chain status are colorized (red/yellow/green). Color is disabled automatically when output is piped/redirected or when the `NO_COLOR` environment variable is set.
 
@@ -57,6 +62,21 @@ ssl-watch -domain example.com -threshold 30 -short
 
 # Machine-readable JSON output
 ssl-watch -domain example.com -output json
+
+# Use a shorter connection timeout (3 seconds)
+ssl-watch -domain example.com -timeout 3
+
+# Check several domains at once
+ssl-watch -domain a.com,b.com,c.com
+
+# Check a list of domains from a file (one per line)
+ssl-watch -domain-file domains.txt -threshold 30
+
+# Read the domain list from stdin
+cat domains.txt | ssl-watch -domain-file -
+
+# Check a mail server certificate via STARTTLS (defaults to port 587)
+ssl-watch -domain smtp.example.com -starttls smtp
 ```
 
 ### Sample output
@@ -99,11 +119,15 @@ ssl-watch -domain github.com -output json
 
 The `chain_valid` and `chain_error` fields are omitted for certificates loaded from a file and when `-insecure` is used. The `chain_expiry_warning` object (`{"subject": ..., "days_remaining": ...}`) is present only when an intermediate certificate expires before the leaf.
 
+When several domains are checked, the JSON output is an array; each element carries an extra `domain` field, and domains that could not be retrieved appear as `{"domain": "...", "error": "..."}`.
+
 ### Exit codes
 
 - `0`: success — certificate retrieved (and, with `-threshold`, days remaining is at or above the threshold for every certificate in the chain).
 - `2`: a certificate in the chain (leaf or an intermediate) expires within `-threshold` days.
 - `1`: an error occurred (connection failure, parse error, invalid arguments).
+
+When several domains are checked, the codes are aggregated: `1` if any domain failed to be retrieved, otherwise `2` if any certificate expires within `-threshold`, otherwise `0`.
 
 ## Installation
 

@@ -14,6 +14,7 @@ func TestParse(t *testing.T) {
 	// Mock command-line arguments for testing
 	os.Args = []string{"cmd",
 		"-domain", "example.com",
+		"-domain-file", "domains.txt",
 		"-certfile", "cert.pem",
 		"-port", "443",
 		"-ipaddr", "192.168.1.1",
@@ -21,6 +22,8 @@ func TestParse(t *testing.T) {
 		"-insecure",
 		"-threshold", "30",
 		"-output", "json",
+		"-timeout", "5",
+		"-starttls", "smtp",
 		"-version"}
 
 	// Create a new instance of the DefaultFlagParser
@@ -53,8 +56,29 @@ func TestParse(t *testing.T) {
 	if cfg.Output != "json" {
 		t.Errorf("expected output to be 'json', got '%s'", cfg.Output)
 	}
+	if cfg.Timeout != 5 {
+		t.Errorf("expected timeout to be 5, got %d", cfg.Timeout)
+	}
+	if cfg.DomainFile != "domains.txt" {
+		t.Errorf("expected domainFile to be 'domains.txt', got '%s'", cfg.DomainFile)
+	}
+	if cfg.StartTLS != "smtp" {
+		t.Errorf("expected starttls to be 'smtp', got '%s'", cfg.StartTLS)
+	}
 	if !cfg.ShowVersion {
 		t.Error("expected showVersion to be true")
+	}
+}
+
+// TestParseDefaults verifies the timeout falls back to its 10-second default
+// when the flag is not supplied.
+func TestParseDefaults(t *testing.T) {
+	os.Args = []string{"cmd", "-domain", "example.com"}
+
+	cfg := NewDefaultFlagParser().Parse()
+
+	if cfg.Timeout != 10 {
+		t.Errorf("expected default timeout 10, got %d", cfg.Timeout)
 	}
 }
 
@@ -88,7 +112,7 @@ func TestUsage(t *testing.T) {
 	parser.Usage()
 
 	out := buf.String()
-	for _, want := range []string{GitURL, "Usage:", "-domain", "-threshold"} {
+	for _, want := range []string{GitURL, "Usage:", "-domain", "-domain-file", "-threshold", "-timeout", "-starttls"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected usage output to contain %q, got:\n%s", want, out)
 		}
