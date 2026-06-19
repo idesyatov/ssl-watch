@@ -10,11 +10,28 @@ import (
 	"io"
 	"log"
 	"os"
+	"runtime/debug"
 	"strings"
 	"time"
 )
 
+// version is stamped by the release build (goreleaser -ldflags). For "go install
+// module@vX.Y.Z" builds it stays "dev" and resolveVersion falls back to the
+// module version embedded in the binary's build info.
 var version = "dev"
+
+// resolveVersion returns the release version stamped at build time, or, when the
+// binary was produced by "go install module@version", the module version from
+// the build info. Falls back to "dev" for local go build / go run.
+func resolveVersion() string {
+	if version != "dev" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return version
+}
 
 // defaultPort mirrors the -port flag default; when -starttls is used and the
 // port was left at this value, the protocol's standard port is substituted.
@@ -36,7 +53,7 @@ func main() {
 
 	// Check if the version flag is set
 	if cfg.ShowVersion {
-		fmt.Printf("Version: %s\n", version)
+		fmt.Printf("Version: %s\n", resolveVersion())
 		fmt.Printf("GitHub: %s\n", flags.GitURL)
 		return
 	}

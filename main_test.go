@@ -61,6 +61,25 @@ func leafInfo(cn string, days int) *cert.CertInfo {
 	}
 }
 
+// TestResolveVersion verifies the stamped version wins and that the fallback
+// never yields an empty string.
+func TestResolveVersion(t *testing.T) {
+	orig := version
+	defer func() { version = orig }()
+
+	version = "1.2.3"
+	if got := resolveVersion(); got != "1.2.3" {
+		t.Errorf("expected stamped version '1.2.3', got %q", got)
+	}
+
+	// With the default "dev", resolveVersion falls back to build info, or "dev"
+	// when none is available — but never an empty string.
+	version = "dev"
+	if got := resolveVersion(); got == "" {
+		t.Error("expected a non-empty version from the fallback, got empty")
+	}
+}
+
 // TestResolveDomains verifies comma splitting, trimming, de-duplication and
 // reading from a file.
 func TestResolveDomains(t *testing.T) {
