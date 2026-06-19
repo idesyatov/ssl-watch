@@ -22,6 +22,7 @@ func TestParse(t *testing.T) {
 		"-insecure",
 		"-threshold", "30",
 		"-output", "json",
+		"-chain",
 		"-timeout", "5",
 		"-starttls", "smtp",
 		"-version"}
@@ -64,6 +65,9 @@ func TestParse(t *testing.T) {
 	}
 	if cfg.StartTLS != "smtp" {
 		t.Errorf("expected starttls to be 'smtp', got '%s'", cfg.StartTLS)
+	}
+	if !cfg.Chain {
+		t.Error("expected chain to be true")
 	}
 	if !cfg.ShowVersion {
 		t.Error("expected showVersion to be true")
@@ -112,7 +116,7 @@ func TestUsage(t *testing.T) {
 	parser.Usage()
 
 	out := buf.String()
-	for _, want := range []string{GitURL, "Usage:", "-domain", "-domain-file", "-threshold", "-timeout", "-starttls"} {
+	for _, want := range []string{GitURL, "Usage:", "Target:", "Connection:", "Output:", "Monitoring:", "-domain", "-domain-file", "-threshold", "-timeout", "-starttls", "-chain"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected usage output to contain %q, got:\n%s", want, out)
 		}

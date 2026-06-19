@@ -1,6 +1,12 @@
 # ssl-watch
 
-ssl-watch is a simple command-line tool to check the SSL certificate of a domain (or several at once) or a local certificate file. It retrieves and displays information about the SSL certificate, including the subject, issuer, SANs, serial number, signature algorithm, validity period, the number of days remaining until expiration, and — for fetched certificates — the verification status of the certificate chain. It can also reach certificates behind STARTTLS (SMTP/IMAP/POP3/FTP).
+[![CI](https://github.com/idesyatov/ssl-watch/actions/workflows/ci.yml/badge.svg)](https://github.com/idesyatov/ssl-watch/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/idesyatov/ssl-watch)](https://github.com/idesyatov/ssl-watch/releases)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/idesyatov/ssl-watch)](go.mod)
+[![Go Report Card](https://goreportcard.com/badge/github.com/idesyatov/ssl-watch)](https://goreportcard.com/report/github.com/idesyatov/ssl-watch)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+ssl-watch is a simple command-line tool to check the SSL certificate of a domain (or several at once) or a local certificate file. It retrieves and displays information about the SSL certificate, including the subject, issuer, SANs, serial number, signature algorithm, public key type/size, validity period, the number of days remaining until expiration, and — for fetched certificates — the negotiated TLS version/cipher and the verification status of the certificate chain. It can also reach certificates behind STARTTLS (SMTP/IMAP/POP3/FTP).
 
 ## Usage
 
@@ -26,7 +32,10 @@ For monitoring (cron/CI), use `-threshold` to make the tool exit with code `2` w
 - `-insecure`: Skip certificate chain verification (optional).
 - `-threshold <days>`: Exit with code `2` when the days remaining is below this value; `0` disables (optional).
 - `-output <text|json>`: Output format (default `text`).
+- `-chain`: Print every certificate in the chain (subject, issuer, expiry), not just the leaf.
 - `-timeout <seconds>`: Connection timeout when fetching a remote certificate (default `10`).
+
+The output also reports the public key algorithm and size (`Public key: RSA 2048` / `ECDSA P-256` / `Ed25519`) and, for fetched certificates, the negotiated TLS version and cipher suite (`TLS: TLS 1.3 (TLS_AES_128_GCM_SHA256)`). A `(weak)` marker is shown next to a SHA-1 signature or an RSA key smaller than 2048 bits.
 
 In text mode, when writing to an interactive terminal, the days-remaining value and the chain status are colorized (red/yellow/green). Color is disabled automatically when output is piped/redirected or when the `NO_COLOR` environment variable is set.
 
@@ -77,6 +86,9 @@ cat domains.txt | ssl-watch -domain-file -
 
 # Check a mail server certificate via STARTTLS (defaults to port 587)
 ssl-watch -domain smtp.example.com -starttls smtp
+
+# Print every certificate in the chain
+ssl-watch -domain example.com -chain
 ```
 
 ### Sample output
@@ -88,10 +100,12 @@ Issuer: CN=Sectigo Public Server Authentication CA DV E36,O=Sectigo Limited,C=GB
 SANs: github.com, www.github.com
 Serial: E7:CE:CC:3B:13:FB:3B:7B:8A:46:EA:8C:D0:AE:B7:1C
 Signature: ECDSA-SHA256
+Public key: ECDSA P-256
 Valid from: 2026-05-05 00:00:00 +0000 UTC
 Expires on: 2026-08-02 23:59:59 +0000 UTC
 Days remaining: 45
 Used IP address: 140.82.121.4
+TLS: TLS 1.3 (TLS_AES_128_GCM_SHA256)
 Chain: VALID
 ```
 
@@ -109,15 +123,18 @@ ssl-watch -domain github.com -output json
   "sans": ["github.com", "www.github.com"],
   "serial": "E7:CE:CC:3B:13:FB:3B:7B:8A:46:EA:8C:D0:AE:B7:1C",
   "signature_algorithm": "ECDSA-SHA256",
+  "public_key": "ECDSA P-256",
   "not_before": "2026-05-05T00:00:00Z",
   "not_after": "2026-08-02T23:59:59Z",
   "days_remaining": 45,
   "used_ip": "140.82.121.4",
+  "tls_version": "TLS 1.3",
+  "cipher_suite": "TLS_AES_128_GCM_SHA256",
   "chain_valid": true
 }
 ```
 
-The `chain_valid` and `chain_error` fields are omitted for certificates loaded from a file and when `-insecure` is used. The `chain_expiry_warning` object (`{"subject": ..., "days_remaining": ...}`) is present only when an intermediate certificate expires before the leaf.
+The `chain_valid` and `chain_error` fields are omitted for certificates loaded from a file and when `-insecure` is used. The `chain_expiry_warning` object (`{"subject": ..., "days_remaining": ...}`) is present only when an intermediate certificate expires before the leaf. `tls_version`/`cipher_suite` are present only for fetched certificates; `weak_signature`/`weak_key` appear (as `true`) only for weak crypto; the `chain` array (each entry `{subject, issuer, not_after, days_remaining}`) is present only with `-chain`.
 
 When several domains are checked, the JSON output is an array; each element carries an extra `domain` field, and domains that could not be retrieved appear as `{"domain": "...", "error": "..."}`.
 
