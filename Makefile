@@ -9,7 +9,7 @@ BIN_FILE = $(BUILD_DIR)/$(BINARY_NAME)
 
 # Containerized toolchain — Go is not required locally; these run in Docker.
 GO_IMAGE ?= golang:1.23
-LINT_IMAGE ?= golangci/golangci-lint:latest
+LINT_IMAGE ?= golangci/golangci-lint:v2.12.2
 DOCKER_RUN = docker run --rm -v "$(CURDIR)":/app -w /app
 
 # Default target
