@@ -11,6 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -233,6 +234,120 @@ func TestNegotiateStartTLS_Unknown(t *testing.T) {
 	}
 }
 
+// genCert generates a self-signed certificate with its raw DER populated (so
+// Fingerprint is meaningful). Each call uses a fresh key → a distinct cert.
+func genCert(t *testing.T, cn string, notAfter time.Time) *x509.Certificate {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+	tmpl := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: cn},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     notAfter,
+		DNSNames:     []string{cn},
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	c, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	return c
+}
+
+// TestFingerprint verifies the SHA-256 fingerprint is stable and distinguishes
+// different certificates.
+func TestFingerprint(t *testing.T) {
+	a := genCert(t, "a.example", time.Now().Add(90*24*time.Hour))
+	b := genCert(t, "b.example", time.Now().Add(90*24*time.Hour))
+
+	fpA := Fingerprint(a)
+	if len(fpA) != 64 {
+		t.Errorf("expected 64 hex chars, got %d", len(fpA))
+	}
+	if fpA != Fingerprint(a) {
+		t.Error("fingerprint should be stable")
+	}
+	if fpA == Fingerprint(b) {
+		t.Error("different certificates should have different fingerprints")
+	}
+}
+
+// TestPrintAllIPs verifies the per-address table, the "differ" verdict and the
+// JSON object, including the AllIPsResult summary.
+func TestPrintAllIPs(t *testing.T) {
+	now := time.Now()
+	same := genCert(t, "example.com", now.Add(90*24*time.Hour))
+	diff := genCert(t, "example.com", now.Add(8*24*time.Hour))
+	results := []IPResult{
+		{IP: "203.0.113.10", Info: &CertInfo{Cert: same, Chain: []*x509.Certificate{same}, Verified: true}},
+		{IP: "203.0.113.11", Info: &CertInfo{Cert: same, Chain: []*x509.Certificate{same}, Verified: true}},
+		{IP: "203.0.113.12", Info: &CertInfo{Cert: diff, Chain: []*x509.Certificate{diff}, Verified: true}},
+		{IP: "203.0.113.13", Err: errors.New("connection refused")},
+	}
+
+	var res AllIPsResult
+	out := captureStdout(t, func() { res = PrintAllIPs("example.com", results, PrintOptions{}) })
+
+	if res.AllMatch {
+		t.Error("expected AllMatch false (certificates differ)")
+	}
+	if !res.HadError {
+		t.Error("expected HadError true (one address failed)")
+	}
+	for _, want := range []string{"checking 4 address(es)", "203.0.113.10", "error: connection refused", "differ across addresses"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("text output missing %q:\n%s", want, out)
+		}
+	}
+
+	out = captureStdout(t, func() { PrintAllIPs("example.com", results, PrintOptions{JSON: true}) })
+	var got struct {
+		Domain            string           `json:"domain"`
+		CertificatesMatch bool             `json:"certificates_match"`
+		Addresses         []map[string]any `json:"addresses"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	if got.Domain != "example.com" || got.CertificatesMatch {
+		t.Errorf("expected domain example.com and certificates_match false, got %+v", got)
+	}
+	if len(got.Addresses) != 4 {
+		t.Fatalf("expected 4 addresses, got %d:\n%s", len(got.Addresses), out)
+	}
+	if got.Addresses[0]["ip"] != "203.0.113.10" || got.Addresses[0]["fingerprint"] == nil {
+		t.Errorf("first address should carry ip+fingerprint, got %v", got.Addresses[0])
+	}
+	if got.Addresses[3]["error"] == nil {
+		t.Errorf("last address should be an error entry, got %v", got.Addresses[3])
+	}
+}
+
+// TestPrintAllIPs_AllMatch verifies the matching verdict and AllMatch=true.
+func TestPrintAllIPs_AllMatch(t *testing.T) {
+	c := genCert(t, "example.com", time.Now().Add(90*24*time.Hour))
+	results := []IPResult{
+		{IP: "203.0.113.10", Info: &CertInfo{Cert: c, Chain: []*x509.Certificate{c}, Verified: true}},
+		{IP: "203.0.113.11", Info: &CertInfo{Cert: c, Chain: []*x509.Certificate{c}, Verified: true}},
+	}
+
+	var res AllIPsResult
+	out := captureStdout(t, func() { res = PrintAllIPs("example.com", results, PrintOptions{}) })
+	if !res.AllMatch || res.HadError {
+		t.Errorf("expected AllMatch true and no error, got %+v", res)
+	}
+	if !strings.Contains(out, "same certificate") {
+		t.Errorf("expected matching verdict, got:\n%s", out)
+	}
+}
+
 // TestFormatPublicKey verifies the algorithm/size rendering for RSA, ECDSA and
 // Ed25519 keys.
 func TestFormatPublicKey(t *testing.T) {
@@ -334,6 +449,110 @@ func TestPrint_WeakMarkers(t *testing.T) {
 	}
 	if !strings.Contains(out, "(weak)") || !strings.Contains(out, "Signature:") {
 		t.Errorf("expected weak signature marker, got:\n%s", out)
+	}
+}
+
+// TestCheapChecks verifies the not-yet-valid, name-coverage and EKU detectors.
+func TestCheapChecks(t *testing.T) {
+	now := time.Now()
+
+	// not-yet-valid
+	if !notYetValid(&x509.Certificate{NotBefore: now.Add(48 * time.Hour)}) {
+		t.Error("future NotBefore should be flagged not-yet-valid")
+	}
+	if notYetValid(&x509.Certificate{NotBefore: now.Add(-time.Hour)}) {
+		t.Error("active certificate should not be flagged not-yet-valid")
+	}
+
+	// name coverage with a one-level wildcard
+	wild := &x509.Certificate{DNSNames: []string{"*.example.com"}}
+	if nameMismatch(&CertInfo{Cert: wild, CheckedName: "shop.example.com"}) {
+		t.Error("*.example.com should cover shop.example.com")
+	}
+	if !nameMismatch(&CertInfo{Cert: wild, CheckedName: "api.shop.example.com"}) {
+		t.Error("*.example.com should NOT cover api.shop.example.com")
+	}
+	if nameMismatch(&CertInfo{Cert: wild, CheckedName: ""}) {
+		t.Error("empty CheckedName (file load) should not be flagged")
+	}
+
+	// EKU / server auth
+	if !notServerAuth(&x509.Certificate{ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}) {
+		t.Error("client-auth-only certificate should be flagged")
+	}
+	if notServerAuth(&x509.Certificate{ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}) {
+		t.Error("server-auth certificate should not be flagged")
+	}
+	if notServerAuth(&x509.Certificate{}) {
+		t.Error("certificate without EKU restriction should not be flagged")
+	}
+}
+
+// TestPrint_CheapWarnings verifies all three warnings appear in text and JSON for
+// a problematic certificate.
+func TestPrint_CheapWarnings(t *testing.T) {
+	now := time.Now()
+	cert := &x509.Certificate{
+		Subject:      pkix.Name{CommonName: "shop.example.com"},
+		SerialNumber: big.NewInt(1),
+		DNSNames:     []string{"*.example.com"},
+		NotBefore:    now.Add(48 * time.Hour),
+		NotAfter:     now.Add(90 * 24 * time.Hour),
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	info := &CertInfo{Cert: cert, CheckedName: "api.shop.example.com"}
+	printer := &CertificatePrinterImpl{}
+
+	out := captureStdout(t, func() { printer.Print(info, PrintOptions{}) })
+	for _, want := range []string{
+		"not valid yet",
+		`does not cover "api.shop.example.com"`,
+		"not intended for server authentication",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected output to contain %q, got:\n%s", want, out)
+		}
+	}
+
+	out = captureStdout(t, func() { printer.Print(info, PrintOptions{JSON: true}) })
+	var got struct {
+		NotYetValid   bool `json:"not_yet_valid"`
+		NameMismatch  bool `json:"name_mismatch"`
+		NotServerAuth bool `json:"not_server_auth"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	if !got.NotYetValid || !got.NameMismatch || !got.NotServerAuth {
+		t.Errorf("expected all three flags true, got %+v", got)
+	}
+}
+
+// TestPrint_HealthyNoWarnings verifies a healthy certificate produces no warnings
+// and omits the problem flags from JSON.
+func TestPrint_HealthyNoWarnings(t *testing.T) {
+	now := time.Now()
+	cert := &x509.Certificate{
+		Subject:      pkix.Name{CommonName: "good.example"},
+		SerialNumber: big.NewInt(1),
+		DNSNames:     []string{"good.example"},
+		NotBefore:    now.Add(-24 * time.Hour),
+		NotAfter:     now.Add(90 * 24 * time.Hour),
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	info := &CertInfo{Cert: cert, CheckedName: "good.example"}
+	printer := &CertificatePrinterImpl{}
+
+	out := captureStdout(t, func() { printer.Print(info, PrintOptions{}) })
+	if strings.Contains(out, "WARNING") || strings.Contains(out, "not intended") {
+		t.Errorf("healthy certificate should produce no warnings, got:\n%s", out)
+	}
+
+	out = captureStdout(t, func() { printer.Print(info, PrintOptions{JSON: true}) })
+	for _, k := range []string{"not_yet_valid", "name_mismatch", "not_server_auth"} {
+		if strings.Contains(out, k) {
+			t.Errorf("healthy JSON should omit %q, got:\n%s", k, out)
+		}
 	}
 }
 

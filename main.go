@@ -9,8 +9,10 @@ import (
 	"github.com/idesyatov/ssl-watch/internal/validation"
 	"io"
 	"log"
+	"net"
 	"os"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"time"
 )
@@ -96,6 +98,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	// -all-ips resolves and checks every address of a single domain
+	if cfg.AllIPs {
+		switch {
+		case cfg.CertFile != "":
+			fmt.Fprintf(os.Stderr, "Error: -all-ips cannot be combined with -certfile\n\n")
+			parser.Usage()
+			os.Exit(1)
+		case cfg.IPAddr != "":
+			fmt.Fprintf(os.Stderr, "Error: -all-ips cannot be combined with -ipaddr\n\n")
+			parser.Usage()
+			os.Exit(1)
+		case len(domains) != 1:
+			fmt.Fprintf(os.Stderr, "Error: -all-ips requires exactly one domain\n\n")
+			parser.Usage()
+			os.Exit(1)
+		}
+	}
+
 	// Validate the STARTTLS protocol and pick the protocol's default port when
 	// the port was left at its default.
 	if cfg.StartTLS != "" {
@@ -123,6 +143,11 @@ func main() {
 		Chain:     cfg.Chain,
 	}
 	timeout := time.Duration(cfg.Timeout) * time.Second
+
+	// -all-ips: resolve the domain and check the certificate on every address.
+	if cfg.AllIPs {
+		os.Exit(runAllIPs(fetcher, domains[0], cfg, opts, timeout))
+	}
 
 	// Single target — a certificate file or exactly one domain — keeps the
 	// original output format and behavior.
@@ -214,6 +239,50 @@ func runBatch(fetcher cert.CertificateFetcher, printer cert.CertificatePrinter, 
 	case hadError:
 		return 1
 	case expiring:
+		return 2
+	}
+	return 0
+}
+
+// runAllIPs resolves every address of the domain, checks the certificate on each
+// (same SNI), prints the per-address result and reports the exit code: 1 if any
+// address could not be checked, otherwise 2 if the certificates differ or any
+// expires within -threshold, otherwise 0.
+func runAllIPs(fetcher cert.CertificateFetcher, domain string, cfg flags.Config, opts cert.PrintOptions, timeout time.Duration) int {
+	ips, err := net.LookupIP(domain)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to resolve %s: %v\n", domain, err)
+		return 1
+	}
+
+	seen := make(map[string]bool)
+	var addrs []string
+	for _, ip := range ips {
+		s := ip.String()
+		if !seen[s] {
+			seen[s] = true
+			addrs = append(addrs, s)
+		}
+	}
+	if len(addrs) == 0 {
+		fmt.Fprintf(os.Stderr, "Error: no addresses resolved for %s\n", domain)
+		return 1
+	}
+	sort.Strings(addrs)
+
+	results := make([]cert.IPResult, 0, len(addrs))
+	for _, ip := range addrs {
+		info, err := fetcher.Fetch(domain, cfg.Port, ip, cfg.Insecure, timeout, cfg.StartTLS)
+		results = append(results, cert.IPResult{IP: ip, Info: info, Err: err})
+	}
+
+	res := cert.PrintAllIPs(domain, results, opts)
+	switch {
+	case res.HadError:
+		return 1
+	case !res.AllMatch:
+		return 2
+	case cfg.Threshold > 0 && res.MinDays < cfg.Threshold:
 		return 2
 	}
 	return 0

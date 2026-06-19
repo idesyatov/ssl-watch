@@ -5,8 +5,10 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -25,6 +27,7 @@ type CertInfo struct {
 	UsedIP      string              // Remote IP address; empty when loaded from a file
 	TLSVersion  string              // Negotiated TLS version; empty when loaded from a file
 	CipherSuite string              // Negotiated cipher suite; empty when loaded from a file
+	CheckedName string              // Hostname the cert was requested for; empty when loaded from a file
 	FromFile    bool                // True when the certificate was loaded from a local file
 	Verified    bool                // True when chain verification was attempted
 	ChainErr    error               // Chain verification error; nil means valid (only meaningful when Verified)
@@ -164,6 +167,41 @@ func isWeakKey(c *x509.Certificate) bool {
 	return false
 }
 
+// notYetValid reports whether the certificate's validity window has not started
+// yet (NotBefore is in the future).
+func notYetValid(c *x509.Certificate) bool {
+	return time.Now().Before(c.NotBefore)
+}
+
+// nameMismatch reports whether the certificate does not cover the hostname it was
+// requested for. It is only meaningful for fetched certificates (CheckedName set);
+// VerifyHostname handles SANs and wildcards per RFC 6125.
+func nameMismatch(info *CertInfo) bool {
+	return info.CheckedName != "" && info.Cert.VerifyHostname(info.CheckedName) != nil
+}
+
+// notServerAuth reports whether the certificate restricts its extended key usage
+// and that restriction excludes TLS server authentication. A certificate with no
+// EKU extension is valid for any use and is not flagged.
+func notServerAuth(c *x509.Certificate) bool {
+	if len(c.ExtKeyUsage) == 0 {
+		return false
+	}
+	for _, u := range c.ExtKeyUsage {
+		if u == x509.ExtKeyUsageServerAuth || u == x509.ExtKeyUsageAny {
+			return false
+		}
+	}
+	return true
+}
+
+// Fingerprint returns the lower-case hex SHA-256 of the certificate's raw DER,
+// the stable identity used to tell whether two endpoints serve the same cert.
+func Fingerprint(c *x509.Certificate) string {
+	sum := sha256.Sum256(c.Raw)
+	return hex.EncodeToString(sum[:])
+}
+
 // CertificateFetcherImpl is an implementation of the CertificateFetcher interface.
 // It provides functionality to fetch certificates from a specified domain or IP address.
 type CertificateFetcherImpl struct{}
@@ -205,6 +243,7 @@ func (f *CertificateFetcherImpl) Fetch(domain, port, ipaddr string, insecure boo
 		UsedIP:      usedIP,
 		TLSVersion:  tls.VersionName(state.Version),
 		CipherSuite: tls.CipherSuiteName(state.CipherSuite),
+		CheckedName: domain,
 	}
 	if !insecure {
 		info.Verified = true
@@ -443,18 +482,7 @@ func (p *CertificatePrinterImpl) printText(info *CertInfo, days int, opts PrintO
 	fmt.Printf("Valid from: %s\n", cert.NotBefore)
 	fmt.Printf("Expires on: %s\n", cert.NotAfter)
 
-	daysStr := fmt.Sprintf("%d", days)
-	if opts.Color {
-		switch {
-		case days < 0:
-			daysStr = colorize(daysStr, colorRed)
-		case opts.Threshold > 0 && days < opts.Threshold:
-			daysStr = colorize(daysStr, colorYellow)
-		default:
-			daysStr = colorize(daysStr, colorGreen)
-		}
-	}
-	fmt.Printf("Days remaining: %s\n", daysStr)
+	fmt.Printf("Days remaining: %s\n", colorizeDays(days, opts.Threshold, opts.Color))
 
 	if !info.FromFile {
 		fmt.Printf("Used IP address: %s\n", info.UsedIP)
@@ -482,6 +510,20 @@ func (p *CertificatePrinterImpl) printText(info *CertInfo, days int, opts PrintO
 			msg = colorize(msg, color)
 		}
 		fmt.Println(msg)
+	}
+
+	if notYetValid(cert) {
+		inDays := int(time.Until(cert.NotBefore).Hours() / 24)
+		msg := fmt.Sprintf("WARNING: certificate is not valid yet — becomes valid in %d days (%s)",
+			inDays, cert.NotBefore.Format("2006-01-02"))
+		fmt.Println(maybeColor(msg, colorRed, opts.Color))
+	}
+	if nameMismatch(info) {
+		msg := fmt.Sprintf("WARNING: certificate does not cover %q", info.CheckedName)
+		fmt.Println(maybeColor(msg, colorRed, opts.Color))
+	}
+	if notServerAuth(cert) {
+		fmt.Println(maybeColor("WARNING: certificate is not intended for server authentication", colorYellow, opts.Color))
 	}
 
 	if opts.Chain {
@@ -520,6 +562,8 @@ type chainCert struct {
 // original schema.
 type certPayload struct {
 	Domain        string       `json:"domain,omitempty"`
+	IP            string       `json:"ip,omitempty"`
+	Fingerprint   string       `json:"fingerprint,omitempty"`
 	CommonName    string       `json:"common_name"`
 	Subject       string       `json:"subject"`
 	Issuer        string       `json:"issuer"`
@@ -531,10 +575,13 @@ type certPayload struct {
 	WeakKey       bool         `json:"weak_key,omitempty"`
 	NotBefore     string       `json:"not_before"`
 	NotAfter      string       `json:"not_after"`
+	NotYetValid   bool         `json:"not_yet_valid,omitempty"`
 	DaysRemaining int          `json:"days_remaining"`
 	UsedIP        string       `json:"used_ip,omitempty"`
 	TLSVersion    string       `json:"tls_version,omitempty"`
 	CipherSuite   string       `json:"cipher_suite,omitempty"`
+	NameMismatch  bool         `json:"name_mismatch,omitempty"`
+	NotServerAuth bool         `json:"not_server_auth,omitempty"`
 	ChainValid    *bool        `json:"chain_valid,omitempty"`
 	ChainError    string       `json:"chain_error,omitempty"`
 	ChainExpiry   *chainExpiry `json:"chain_expiry_warning,omitempty"`
@@ -559,10 +606,13 @@ func buildPayload(info *CertInfo, domain string, includeChain bool) certPayload 
 		WeakKey:       isWeakKey(cert),
 		NotBefore:     cert.NotBefore.UTC().Format(time.RFC3339),
 		NotAfter:      cert.NotAfter.UTC().Format(time.RFC3339),
+		NotYetValid:   notYetValid(cert),
 		DaysRemaining: DaysUntilExpiry(cert),
 		UsedIP:        info.UsedIP,
 		TLSVersion:    info.TLSVersion,
 		CipherSuite:   info.CipherSuite,
+		NameMismatch:  nameMismatch(info),
+		NotServerAuth: notServerAuth(cert),
 	}
 	if info.Verified {
 		valid := info.ChainErr == nil
@@ -603,6 +653,114 @@ func ErrorPayload(domain, errMsg string) any {
 	}{Domain: domain, Error: errMsg}
 }
 
+// IPResult is the certificate (or error) obtained from one resolved address.
+type IPResult struct {
+	IP   string
+	Info *CertInfo // nil when Err is set
+	Err  error
+}
+
+// AllIPsResult summarizes an all-ips run, for the caller's exit code.
+type AllIPsResult struct {
+	AllMatch bool // every reachable address served the same certificate
+	HadError bool // at least one address could not be checked
+	MinDays  int  // smallest days-until-expiry across reachable addresses
+}
+
+// tallyIPs aggregates per-address results: number of distinct certificates,
+// number of reachable addresses, whether any failed, and the minimum
+// days-until-expiry (weakest link) across reachable addresses.
+func tallyIPs(results []IPResult) (distinct, reachable int, hadError bool, minDays int, haveDays bool) {
+	fps := make(map[string]bool)
+	for _, r := range results {
+		if r.Err != nil {
+			hadError = true
+			continue
+		}
+		reachable++
+		fps[Fingerprint(r.Info.Cert)] = true
+		if d := r.Info.MinDaysUntilExpiry(); !haveDays || d < minDays {
+			minDays, haveDays = d, true
+		}
+	}
+	return len(fps), reachable, hadError, minDays, haveDays
+}
+
+// PrintAllIPs renders the per-address results for a domain (text or JSON) and
+// reports whether all reachable addresses serve the same certificate.
+func PrintAllIPs(domain string, results []IPResult, opts PrintOptions) AllIPsResult {
+	distinct, _, hadError, minDays, _ := tallyIPs(results)
+	if opts.JSON {
+		printAllIPsJSON(domain, results, opts)
+	} else {
+		printAllIPsText(domain, results, opts)
+	}
+	return AllIPsResult{AllMatch: distinct <= 1, HadError: hadError, MinDays: minDays}
+}
+
+// printAllIPsText renders the addresses as a compact table with a final verdict.
+func printAllIPsText(domain string, results []IPResult, opts PrintOptions) {
+	fmt.Printf("%s — checking %d address(es)\n", domain, len(results))
+	for _, r := range results {
+		if r.Err != nil {
+			fmt.Printf("  %-39s  error: %v\n", r.IP, r.Err)
+			continue
+		}
+		c := r.Info.Cert
+		chain := ""
+		if r.Info.Verified {
+			if r.Info.ChainErr == nil {
+				chain = maybeColor("VALID", colorGreen, opts.Color)
+			} else {
+				chain = maybeColor("INVALID", colorRed, opts.Color)
+			}
+		}
+		fmt.Printf("  %-39s  %s  %s days  expires %s  %s\n",
+			r.IP, Fingerprint(c)[:16], colorizeDays(DaysUntilExpiry(c), opts.Threshold, opts.Color),
+			c.NotAfter.Format("2006-01-02"), chain)
+	}
+
+	distinct, reachable, _, _, _ := tallyIPs(results)
+	switch {
+	case distinct >= 2:
+		fmt.Println(maybeColor("WARNING: certificates differ across addresses", colorYellow, opts.Color))
+	case reachable >= 2:
+		fmt.Println(maybeColor("All addresses serve the same certificate.", colorGreen, opts.Color))
+	}
+}
+
+// printAllIPsJSON renders the addresses as a JSON object with a match verdict.
+func printAllIPsJSON(domain string, results []IPResult, opts PrintOptions) {
+	distinct, _, _, _, _ := tallyIPs(results)
+	addresses := make([]any, 0, len(results))
+	for _, r := range results {
+		if r.Err != nil {
+			addresses = append(addresses, struct {
+				IP    string `json:"ip"`
+				Error string `json:"error"`
+			}{IP: r.IP, Error: r.Err.Error()})
+			continue
+		}
+		p := buildPayload(r.Info, "", opts.Chain)
+		p.IP = r.IP
+		p.Fingerprint = Fingerprint(r.Info.Cert)
+		addresses = append(addresses, p)
+	}
+
+	out := struct {
+		Domain            string `json:"domain"`
+		CertificatesMatch bool   `json:"certificates_match"`
+		Addresses         []any  `json:"addresses"`
+	}{Domain: domain, CertificatesMatch: distinct <= 1, Addresses: addresses}
+
+	b, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to encode JSON: %v\n", err)
+		return
+	}
+	fmt.Println(string(b))
+}
+
 // printJSON renders a single certificate as indented JSON.
 func (p *CertificatePrinterImpl) printJSON(info *CertInfo, includeChain bool) {
 	b, err := json.MarshalIndent(buildPayload(info, "", includeChain), "", "  ")
@@ -623,6 +781,23 @@ const (
 
 // colorize wraps s in the given ANSI color and a reset.
 func colorize(s, color string) string { return color + s + colorReset }
+
+// colorizeDays renders a days-remaining value, colorized (when on) red if expired,
+// yellow if below the threshold, green otherwise.
+func colorizeDays(days, threshold int, on bool) string {
+	s := fmt.Sprintf("%d", days)
+	if !on {
+		return s
+	}
+	switch {
+	case days < 0:
+		return colorize(s, colorRed)
+	case threshold > 0 && days < threshold:
+		return colorize(s, colorYellow)
+	default:
+		return colorize(s, colorGreen)
+	}
+}
 
 // maybeColor colorizes s only when on is true.
 func maybeColor(s, color string, on bool) string {

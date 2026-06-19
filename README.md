@@ -6,40 +6,144 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/idesyatov/ssl-watch)](https://goreportcard.com/report/github.com/idesyatov/ssl-watch)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-ssl-watch is a simple command-line tool to check the SSL certificate of a domain (or several at once) or a local certificate file. It retrieves and displays information about the SSL certificate, including the subject, issuer, SANs, serial number, signature algorithm, public key type/size, validity period, the number of days remaining until expiration, and — for fetched certificates — the negotiated TLS version/cipher and the verification status of the certificate chain. It can also reach certificates behind STARTTLS (SMTP/IMAP/POP3/FTP).
+A small command-line tool to inspect and monitor SSL/TLS certificates — for one domain, many at once, or a local certificate file. Built for cron/CI: a `-threshold` flag drives exit codes, and `-output json` makes the result machine-readable.
 
-## Usage
+**What it checks**
 
-To use ssl-watch, you need to specify either the domain(s) you want to check (via `-domain` or `-domain-file`) or the path to a local certificate file. You can also optionally specify a port and an IP address. Additionally, you can use the `-short` flag to output only the number of days remaining until the certificate expires.
+- Expiry and days remaining, with a `-threshold` warning that drives exit code `2`
+- Certificate chain validity (trust, hostname, validity period)
+- Intermediate that expires **before** the leaf (weakest-link expiry)
+- Certificate not valid **yet** (`NotBefore` in the future)
+- Hostname coverage (does the cert actually cover the requested name, wildcards included)
+- Weak crypto (SHA-1 signature, RSA < 2048) and non-server-auth key usage
+- Public key type/size and the negotiated TLS version & cipher
+- Certificates behind **STARTTLS** (SMTP/IMAP/POP3/FTP)
+- The cert on **every IP** of a domain (`-all-ips`) — catch a load balancer serving a stale/different cert
 
-Several domains can be checked in one run via a comma-separated `-domain` or a `-domain-file`. In text mode each domain is printed as its own block prefixed with `==> <domain>`; in JSON mode the output becomes an array of objects (one per domain, each tagged with `domain`, and an `{ "domain", "error" }` entry for any that could not be retrieved).
+## Quick start
 
-By default the certificate chain of a fetched certificate is verified against the system root store (trust, hostname and validity period). The result is reported as `Chain: VALID` or `Chain: INVALID (reason)`. Use `-insecure` to skip this check (e.g. for self-signed certificates). Chain verification is not performed for certificates loaded from a file.
+```bash
+# Install (Linux & macOS) — detects OS/arch/latest release, verifies the checksum
+curl -fsSL https://raw.githubusercontent.com/idesyatov/ssl-watch/master/install.sh | sh
 
-The whole chain is also checked for expiry: if an intermediate certificate expires *before* the leaf, a `WARNING: intermediate "..." expires in N days, before the leaf` line is printed (and a `chain_expiry_warning` object is added to the JSON output). With `-threshold`, the exit code is driven by the weakest link in the chain, not the leaf alone.
+# Check a domain
+ssl-watch -domain example.com
 
-For monitoring (cron/CI), use `-threshold` to make the tool exit with code `2` when the certificate is close to expiry (see [Exit codes](#exit-codes)), and `-output json` for machine-readable output.
+# Check several domains at once
+ssl-watch -domain a.com,b.com,c.com
 
-### Command Line Arguments
+# Check the cert on every balancer IP of a domain, and compare them
+ssl-watch -domain example.com -all-ips
 
-- `-domain <domains>`: The domain to check, or several comma-separated (e.g. `a.com,b.com`). Required if `-certfile`/`-domain-file` are not specified.
-- `-domain-file <path>`: Read domains from a file, one per line (`-` reads stdin). Blank lines and lines starting with `#` are ignored.
-- `-certfile <path>`: The path to the local certificate file (required if `-domain` is not specified).
-- `-port <port>`: The port to connect to (default is 443; with `-starttls` the protocol's default port is used unless overridden).
-- `-ipaddr <ipaddr>`: The IP address to connect to (optional; only valid with a single domain).
-- `-starttls <proto>`: Upgrade the connection via STARTTLS before reading the certificate. One of `smtp`, `imap`, `pop3`, `ftp` (default: direct TLS).
-- `-short`: Output only the number of days remaining until certificate expiration (optional).
-- `-insecure`: Skip certificate chain verification (optional).
-- `-threshold <days>`: Exit with code `2` when the days remaining is below this value; `0` disables (optional).
-- `-output <text|json>`: Output format (default `text`).
-- `-chain`: Print every certificate in the chain (subject, issuer, expiry), not just the leaf.
-- `-timeout <seconds>`: Connection timeout when fetching a remote certificate (default `10`).
+# Check a specific backend/balancer IP (same SNI, chosen address)
+ssl-watch -domain example.com -ipaddr 203.0.113.10
 
-The output also reports the public key algorithm and size (`Public key: RSA 2048` / `ECDSA P-256` / `Ed25519`) and, for fetched certificates, the negotiated TLS version and cipher suite (`TLS: TLS 1.3 (TLS_AES_128_GCM_SHA256)`). A `(weak)` marker is shown next to a SHA-1 signature or an RSA key smaller than 2048 bits.
+# Inspect a local certificate file
+ssl-watch -certfile /path/to/cert.crt
 
-In text mode, when writing to an interactive terminal, the days-remaining value and the chain status are colorized (red/yellow/green). Color is disabled automatically when output is piped/redirected or when the `NO_COLOR` environment variable is set.
+# Print the full certificate chain
+ssl-watch -domain example.com -chain
 
-### Examples
+# A mail server certificate via STARTTLS
+ssl-watch -domain smtp.example.com -starttls smtp
+
+# Monitoring: exit code 2 if it expires within 30 days
+ssl-watch -domain example.com -threshold 30 -short
+
+# Machine-readable output (JSON; an array for multiple domains)
+ssl-watch -domain example.com -output json
+```
+
+> The commands above cover the basics. Run `ssl-watch -help` for the full flag list, or expand the sections below for installation options, the complete flag reference, more examples, output/JSON details and exit codes.
+
+<details>
+<summary><strong>Installation</strong> (script options, pre-built binaries, from source)</summary>
+
+### Install script (Linux & macOS)
+
+The fastest way — one command that detects your OS, architecture and the latest
+release automatically, verifies the archive's SHA-256 checksum, then installs the
+binary to `/usr/local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/idesyatov/ssl-watch/master/install.sh | sh
+```
+
+`sudo` is requested only if the install directory is not writable. Override the
+target directory or pin a version with environment variables:
+
+```bash
+# Install to a custom directory (no sudo needed)
+curl -fsSL https://raw.githubusercontent.com/idesyatov/ssl-watch/master/install.sh | BINDIR="$HOME/.local/bin" sh
+
+# Install a specific version
+curl -fsSL https://raw.githubusercontent.com/idesyatov/ssl-watch/master/install.sh | VERSION=v1.5.0 sh
+```
+
+> Prefer to review before running? Download [`install.sh`](https://raw.githubusercontent.com/idesyatov/ssl-watch/master/install.sh), read it, then run `sh install.sh`.
+
+### Pre-built binaries (manual)
+
+Download an archive for your OS/arch from the [latest release](https://github.com/idesyatov/ssl-watch/releases/latest), extract it and place the binary on your `PATH`. Available builds:
+
+- `linux_amd64`, `linux_arm64`
+- `darwin_amd64` (Intel Mac), `darwin_arm64` (Apple Silicon)
+- `windows_amd64` (`.zip` archive)
+
+SHA-256 checksums for all archives are published as `checksums.txt` on the same release page.
+
+### From source
+
+```bash
+go install github.com/idesyatov/ssl-watch@latest
+```
+
+Or clone and build:
+
+```bash
+git clone https://github.com/idesyatov/ssl-watch.git
+cd ssl-watch
+make build
+```
+
+</details>
+
+<details>
+<summary><strong>Command-line flags</strong></summary>
+
+**Target** (one is required)
+
+- `-domain <domains>` — domain to check, or several comma-separated (e.g. `a.com,b.com`).
+- `-domain-file <path>` — read domains from a file, one per line (`-` reads stdin); blank lines and `#` comments are ignored.
+- `-certfile <path>` — inspect a local certificate file instead of connecting.
+
+**Connection**
+
+- `-port <port>` — port to connect to (default `443`; with `-starttls` the protocol's default port is used unless overridden).
+- `-ipaddr <ipaddr>` — connect to a specific IP (only valid with a single domain).
+- `-starttls <proto>` — upgrade via STARTTLS before reading the certificate: `smtp`, `imap`, `pop3` or `ftp`.
+- `-timeout <seconds>` — connection timeout when fetching (default `10`).
+- `-insecure` — skip certificate chain verification (e.g. for self-signed certs).
+
+**Output**
+
+- `-output <text|json>` — output format (default `text`).
+- `-short` — print only the number of days remaining.
+- `-chain` — print every certificate in the chain (subject, issuer, expiry).
+- `-all-ips` — resolve every address of the domain and check the certificate on each, then report whether they match (single domain only).
+
+**Monitoring**
+
+- `-threshold <days>` — exit with code `2` when days remaining is below this value; `0` disables.
+
+In text mode, when writing to an interactive terminal, the days-remaining value and chain status are colorized (red/yellow/green). Color is disabled automatically when output is piped/redirected or when `NO_COLOR` is set.
+
+Several domains can be checked in one run via comma-separated `-domain` or `-domain-file`. In text mode each is printed as its own block prefixed with `==> <domain>`; in JSON mode the output becomes an array (one object per domain, each tagged with `domain`, and an `{ "domain", "error" }` entry for any that could not be retrieved).
+
+</details>
+
+<details>
+<summary><strong>Examples</strong></summary>
 
 ```bash
 # Check the SSL certificate for a domain
@@ -48,50 +152,48 @@ ssl-watch -domain example.com
 # Check a local certificate file
 ssl-watch -certfile /path/to/certificate.crt
 
-# Check a domain with a specific port
+# Specific port / IP address
 ssl-watch -domain example.com -port 8443
-
-# Check a domain using a specific IP address
 ssl-watch -domain example.com -ipaddr 192.0.2.1
 
-# Check a domain and output only the number of days remaining until expiration
+# Only the number of days remaining
 ssl-watch -domain example.com -short
 
-# Check a local certificate file and output only the number of days remaining until expiration
-ssl-watch -certfile /path/to/certificate.crt -short
-
-# Check a domain with a specific port and IP address
-ssl-watch -domain example.com -port 8443 -ipaddr 192.0.2.1
-
-# Check a domain with a self-signed certificate, skipping chain verification
+# Skip chain verification (self-signed)
 ssl-watch -domain self-signed.example.com -insecure
 
-# Monitoring: exit code 2 if the certificate expires within 30 days
+# Monitoring: exit code 2 if it expires within 30 days
 ssl-watch -domain example.com -threshold 30 -short
 
-# Machine-readable JSON output
+# Machine-readable JSON
 ssl-watch -domain example.com -output json
 
-# Use a shorter connection timeout (3 seconds)
+# Shorter connection timeout (3 seconds)
 ssl-watch -domain example.com -timeout 3
 
-# Check several domains at once
+# Several domains at once
 ssl-watch -domain a.com,b.com,c.com
 
-# Check a list of domains from a file (one per line)
+# A list of domains from a file, or from stdin
 ssl-watch -domain-file domains.txt -threshold 30
-
-# Read the domain list from stdin
 cat domains.txt | ssl-watch -domain-file -
 
-# Check a mail server certificate via STARTTLS (defaults to port 587)
+# A mail server certificate via STARTTLS (defaults to port 587)
 ssl-watch -domain smtp.example.com -starttls smtp
 
 # Print every certificate in the chain
 ssl-watch -domain example.com -chain
+
+# Check the certificate on every resolved IP (load balancers)
+ssl-watch -domain example.com -all-ips
 ```
 
-### Sample output
+</details>
+
+<details>
+<summary><strong>Output &amp; JSON fields</strong></summary>
+
+### Sample text output
 
 ```text
 Certificate for github.com
@@ -108,6 +210,18 @@ Used IP address: 140.82.121.4
 TLS: TLS 1.3 (TLS_AES_128_GCM_SHA256)
 Chain: VALID
 ```
+
+Problems are surfaced as extra `WARNING:` lines and are **only printed when they apply**,
+so a healthy certificate stays clean. Examples:
+
+```text
+WARNING: certificate is not valid yet — becomes valid in 3 days (2026-06-22)
+WARNING: certificate does not cover "api.shop.example.com"
+WARNING: intermediate "R3" expires in 12 days, before the leaf (89 days)
+WARNING: certificate is not intended for server authentication
+```
+
+A `(weak)` marker is shown next to a SHA-1 signature or an RSA key smaller than 2048 bits.
 
 ### JSON output
 
@@ -134,67 +248,42 @@ ssl-watch -domain github.com -output json
 }
 ```
 
-The `chain_valid` and `chain_error` fields are omitted for certificates loaded from a file and when `-insecure` is used. The `chain_expiry_warning` object (`{"subject": ..., "days_remaining": ...}`) is present only when an intermediate certificate expires before the leaf. `tls_version`/`cipher_suite` are present only for fetched certificates; `weak_signature`/`weak_key` appear (as `true`) only for weak crypto; the `chain` array (each entry `{subject, issuer, not_after, days_remaining}`) is present only with `-chain`.
+Field notes:
 
-When several domains are checked, the JSON output is an array; each element carries an extra `domain` field, and domains that could not be retrieved appear as `{"domain": "...", "error": "..."}`.
+- `chain_valid` / `chain_error` — omitted for file-loaded certificates and with `-insecure`.
+- `tls_version` / `cipher_suite` — present only for fetched certificates.
+- `chain` — the full chain array (`{subject, issuer, not_after, days_remaining}`), present only with `-chain`.
+- `chain_expiry_warning` — `{subject, days_remaining}`, only when an intermediate expires before the leaf.
+- Problem flags appear (as `true`) **only when the problem exists**: `not_yet_valid`, `name_mismatch`, `not_server_auth`, `weak_signature`, `weak_key`.
+- When several domains are checked the output is an array; each element carries an extra `domain` field, and failures appear as `{"domain": "...", "error": "..."}`.
 
-### Exit codes
+### Checking all addresses (`-all-ips`)
 
-- `0`: success — certificate retrieved (and, with `-threshold`, days remaining is at or above the threshold for every certificate in the chain).
-- `2`: a certificate in the chain (leaf or an intermediate) expires within `-threshold` days.
-- `1`: an error occurred (connection failure, parse error, invalid arguments).
+Resolves every A/AAAA record of the domain and checks the certificate on each (same SNI), then reports whether they all serve the same certificate:
+
+```text
+example.com — checking 3 address(es)
+  203.0.113.10                             e3b0c44298fc1c14  89 days  expires 2026-08-02  VALID
+  203.0.113.11                             e3b0c44298fc1c14  89 days  expires 2026-08-02  VALID
+  203.0.113.12                             9f86d081884c7d65  8 days   expires 2026-06-25  VALID
+WARNING: certificates differ across addresses
+```
+
+In JSON mode the result is `{ "domain", "certificates_match", "addresses": [...] }`, where each address is the usual certificate object plus `ip` and `fingerprint` (or `{ "ip", "error" }` for an address that could not be reached). Exit code: `1` if any address failed, otherwise `2` if the certificates differ or any expires within `-threshold`, otherwise `0`.
+
+</details>
+
+<details>
+<summary><strong>Exit codes</strong></summary>
+
+- `0` — success (and, with `-threshold`, days remaining is at or above the threshold for every certificate in the chain).
+- `2` — a certificate in the chain (leaf or intermediate) expires within `-threshold` days.
+- `1` — an error occurred (connection failure, parse error, invalid arguments).
 
 When several domains are checked, the codes are aggregated: `1` if any domain failed to be retrieved, otherwise `2` if any certificate expires within `-threshold`, otherwise `0`.
 
-## Installation
+</details>
 
-### Install script (Linux & macOS)
+## License
 
-The fastest way — one command that detects your OS, architecture and the latest
-release automatically, verifies the archive's SHA-256 checksum, then installs the
-binary to `/usr/local/bin`:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/idesyatov/ssl-watch/master/install.sh | sh
-```
-
-`sudo` is requested only if the install directory is not writable. You can override
-the target directory or pin a version with environment variables:
-
-```bash
-# Install to a custom directory (no sudo needed)
-curl -fsSL https://raw.githubusercontent.com/idesyatov/ssl-watch/master/install.sh | BINDIR="$HOME/.local/bin" sh
-
-# Install a specific version
-curl -fsSL https://raw.githubusercontent.com/idesyatov/ssl-watch/master/install.sh | VERSION=v1.2.0 sh
-```
-
-> Prefer to review before running? Download [`install.sh`](https://raw.githubusercontent.com/idesyatov/ssl-watch/master/install.sh), read it, then run `sh install.sh`.
-
-### Pre-built binaries (manual)
-
-Alternatively, download an archive for your OS/arch from the [latest release](https://github.com/idesyatov/ssl-watch/releases/latest), extract it and place the binary somewhere on your `PATH`.
-
-Available builds:
-
-- `linux_amd64`, `linux_arm64`
-- `darwin_amd64` (Intel Mac), `darwin_arm64` (Apple Silicon)
-- `windows_amd64` (`.zip` archive)
-
-SHA-256 checksums for all archives are published as `checksums.txt` on the same release page.
-
-### From source
-
-Using Go:
-
-```bash
-go install github.com/idesyatov/ssl-watch@latest
-```
-
-Or clone and build manually:
-
-```bash
-git clone https://github.com/idesyatov/ssl-watch.git
-cd ssl-watch
-make build
-```
+[MIT](LICENSE)

@@ -26,6 +26,7 @@ type Config struct {
 	Threshold   int    // Expiry warning threshold in days (0 = disabled); drives exit code 2
 	Output      string // Output format: "text" or "json"
 	Chain       bool   // Print every certificate in the chain
+	AllIPs      bool   // Check the certificate on every resolved IP of the domain
 	Timeout     int    // Connection timeout in seconds for fetching a remote certificate
 	StartTLS    string // STARTTLS protocol to upgrade the connection: smtp/imap/pop3/ftp (empty = direct TLS)
 	ShowVersion bool   // Show version and exit
@@ -59,6 +60,7 @@ type DefaultFlagParser struct {
 	threshold   *int
 	output      *string
 	chain       *bool
+	allIPs      *bool
 	timeout     *int
 	starttls    *string
 	showVersion *bool
@@ -79,6 +81,7 @@ func (d *DefaultFlagParser) Parse() Config {
 		Threshold:   *d.threshold,
 		Output:      *d.output,
 		Chain:       *d.chain,
+		AllIPs:      *d.allIPs,
 		Timeout:     *d.timeout,
 		StartTLS:    *d.starttls,
 		ShowVersion: *d.showVersion,
@@ -111,6 +114,7 @@ func NewDefaultFlagParser() FlagParser {
 		threshold:   fs.Int("threshold", 0, "Warn (exit code 2) when days remaining is below this value (0 disables)"),
 		output:      fs.String("output", "text", "Output format: text or json"),
 		chain:       fs.Bool("chain", false, "Print every certificate in the chain"),
+		allIPs:      fs.Bool("all-ips", false, "Check the certificate on every resolved IP of the domain (single domain only)"),
 		timeout:     fs.Int("timeout", 10, "Connection timeout in seconds when fetching a remote certificate"),
 		starttls:    fs.String("starttls", "", "Upgrade the connection via STARTTLS: smtp, imap, pop3 or ftp (default: direct TLS)"),
 		showVersion: fs.Bool("version", false, "Show version"),
@@ -142,6 +146,7 @@ func NewDefaultFlagParser() FlagParser {
 		fmt.Fprintf(out, "  %s -domain-file domains.txt\n", appName)
 		fmt.Fprintf(out, "  %s -domain smtp.example.com -starttls smtp\n", appName)
 		fmt.Fprintf(out, "  %s -domain example.com -chain\n", appName)
+		fmt.Fprintf(out, "  %s -domain example.com -all-ips\n", appName)
 		fmt.Fprintf(out, "  %s -certfile /path/to/cert.crt\n\n", appName)
 		fmt.Fprintf(out, "GitHub: %s\n\n", GitURL)
 
@@ -159,6 +164,7 @@ func NewDefaultFlagParser() FlagParser {
 		flagLine("output")
 		flagLine("short")
 		flagLine("chain")
+		flagLine("all-ips")
 		fmt.Fprintf(out, "\nMonitoring:\n")
 		flagLine("threshold")
 		fmt.Fprintf(out, "\nMisc:\n")
