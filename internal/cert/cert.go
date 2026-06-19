@@ -654,97 +654,123 @@ func ErrorPayload(domain, errMsg string) any {
 }
 
 // IPResult is the certificate (or error) obtained from one resolved address.
+// Skipped marks an address that is unreachable from this host (no route to its
+// family) — a benign condition rather than a real failure.
 type IPResult struct {
-	IP   string
-	Info *CertInfo // nil when Err is set
-	Err  error
+	IP      string
+	Info    *CertInfo // nil when Err is set
+	Err     error
+	Skipped bool
 }
 
 // AllIPsResult summarizes an all-ips run, for the caller's exit code.
 type AllIPsResult struct {
-	AllMatch bool // every reachable address served the same certificate
-	HadError bool // at least one address could not be checked
-	MinDays  int  // smallest days-until-expiry across reachable addresses
+	AllMatch  bool // every reachable address served the same certificate
+	HadError  bool // at least one address failed for a real reason (not just skipped)
+	Reachable int  // addresses that were actually checked
+	Skipped   int  // addresses skipped as unreachable from this host
+	MinDays   int  // smallest days-until-expiry across reachable addresses
 }
 
-// tallyIPs aggregates per-address results: number of distinct certificates,
-// number of reachable addresses, whether any failed, and the minimum
-// days-until-expiry (weakest link) across reachable addresses.
-func tallyIPs(results []IPResult) (distinct, reachable int, hadError bool, minDays int, haveDays bool) {
+// tallyIPs aggregates per-address results. Skipped addresses count as neither
+// reachable nor errors, and are excluded from the certificate comparison.
+func tallyIPs(results []IPResult) (distinct, reachable, skipped int, hadError bool, minDays int, haveDays bool) {
 	fps := make(map[string]bool)
 	for _, r := range results {
-		if r.Err != nil {
+		switch {
+		case r.Skipped:
+			skipped++
+		case r.Err != nil:
 			hadError = true
-			continue
-		}
-		reachable++
-		fps[Fingerprint(r.Info.Cert)] = true
-		if d := r.Info.MinDaysUntilExpiry(); !haveDays || d < minDays {
-			minDays, haveDays = d, true
+		default:
+			reachable++
+			fps[Fingerprint(r.Info.Cert)] = true
+			if d := r.Info.MinDaysUntilExpiry(); !haveDays || d < minDays {
+				minDays, haveDays = d, true
+			}
 		}
 	}
-	return len(fps), reachable, hadError, minDays, haveDays
+	return len(fps), reachable, skipped, hadError, minDays, haveDays
 }
 
 // PrintAllIPs renders the per-address results for a domain (text or JSON) and
 // reports whether all reachable addresses serve the same certificate.
 func PrintAllIPs(domain string, results []IPResult, opts PrintOptions) AllIPsResult {
-	distinct, _, hadError, minDays, _ := tallyIPs(results)
+	distinct, reachable, skipped, hadError, minDays, _ := tallyIPs(results)
 	if opts.JSON {
 		printAllIPsJSON(domain, results, opts)
 	} else {
 		printAllIPsText(domain, results, opts)
 	}
-	return AllIPsResult{AllMatch: distinct <= 1, HadError: hadError, MinDays: minDays}
+	return AllIPsResult{
+		AllMatch:  distinct <= 1,
+		HadError:  hadError,
+		Reachable: reachable,
+		Skipped:   skipped,
+		MinDays:   minDays,
+	}
 }
 
 // printAllIPsText renders the addresses as a compact table with a final verdict.
 func printAllIPsText(domain string, results []IPResult, opts PrintOptions) {
 	fmt.Printf("%s — checking %d address(es)\n", domain, len(results))
 	for _, r := range results {
-		if r.Err != nil {
+		switch {
+		case r.Skipped:
+			fmt.Printf("  %-39s  skipped (unreachable from this host)\n", r.IP)
+		case r.Err != nil:
 			fmt.Printf("  %-39s  error: %v\n", r.IP, r.Err)
-			continue
-		}
-		c := r.Info.Cert
-		chain := ""
-		if r.Info.Verified {
-			if r.Info.ChainErr == nil {
-				chain = maybeColor("VALID", colorGreen, opts.Color)
-			} else {
-				chain = maybeColor("INVALID", colorRed, opts.Color)
+		default:
+			c := r.Info.Cert
+			chain := ""
+			if r.Info.Verified {
+				if r.Info.ChainErr == nil {
+					chain = maybeColor("VALID", colorGreen, opts.Color)
+				} else {
+					chain = maybeColor("INVALID", colorRed, opts.Color)
+				}
 			}
+			fmt.Printf("  %-39s  %s  %s days  expires %s  %s\n",
+				r.IP, Fingerprint(c)[:16], colorizeDays(DaysUntilExpiry(c), opts.Threshold, opts.Color),
+				c.NotAfter.Format("2006-01-02"), chain)
 		}
-		fmt.Printf("  %-39s  %s  %s days  expires %s  %s\n",
-			r.IP, Fingerprint(c)[:16], colorizeDays(DaysUntilExpiry(c), opts.Threshold, opts.Color),
-			c.NotAfter.Format("2006-01-02"), chain)
 	}
 
-	distinct, reachable, _, _, _ := tallyIPs(results)
+	distinct, reachable, skipped, _, _, _ := tallyIPs(results)
 	switch {
 	case distinct >= 2:
 		fmt.Println(maybeColor("WARNING: certificates differ across addresses", colorYellow, opts.Color))
 	case reachable >= 2:
-		fmt.Println(maybeColor("All addresses serve the same certificate.", colorGreen, opts.Color))
+		fmt.Println(maybeColor("All reachable addresses serve the same certificate.", colorGreen, opts.Color))
+	}
+	if skipped > 0 {
+		fmt.Printf("(%d address(es) skipped — unreachable from this host)\n", skipped)
 	}
 }
 
 // printAllIPsJSON renders the addresses as a JSON object with a match verdict.
 func printAllIPsJSON(domain string, results []IPResult, opts PrintOptions) {
-	distinct, _, _, _, _ := tallyIPs(results)
+	distinct, _, _, _, _, _ := tallyIPs(results)
 	addresses := make([]any, 0, len(results))
 	for _, r := range results {
-		if r.Err != nil {
+		switch {
+		case r.Skipped:
+			addresses = append(addresses, struct {
+				IP      string `json:"ip"`
+				Skipped bool   `json:"skipped"`
+				Error   string `json:"error"`
+			}{IP: r.IP, Skipped: true, Error: r.Err.Error()})
+		case r.Err != nil:
 			addresses = append(addresses, struct {
 				IP    string `json:"ip"`
 				Error string `json:"error"`
 			}{IP: r.IP, Error: r.Err.Error()})
-			continue
+		default:
+			p := buildPayload(r.Info, "", opts.Chain)
+			p.IP = r.IP
+			p.Fingerprint = Fingerprint(r.Info.Cert)
+			addresses = append(addresses, p)
 		}
-		p := buildPayload(r.Info, "", opts.Chain)
-		p.IP = r.IP
-		p.Fingerprint = Fingerprint(r.Info.Cert)
-		addresses = append(addresses, p)
 	}
 
 	out := struct {

@@ -131,6 +131,7 @@ make build
 - `-short` — print only the number of days remaining.
 - `-chain` — print every certificate in the chain (subject, issuer, expiry).
 - `-all-ips` — resolve every address of the domain and check the certificate on each, then report whether they match (single domain only).
+- `-4` / `-6` — with `-all-ips`, restrict the check to IPv4 or IPv6 addresses (optional; addresses unreachable from the host are skipped automatically anyway).
 
 **Monitoring**
 
@@ -269,7 +270,9 @@ example.com — checking 3 address(es)
 WARNING: certificates differ across addresses
 ```
 
-In JSON mode the result is `{ "domain", "certificates_match", "addresses": [...] }`, where each address is the usual certificate object plus `ip` and `fingerprint` (or `{ "ip", "error" }` for an address that could not be reached). Exit code: `1` if any address failed, otherwise `2` if the certificates differ or any expires within `-threshold`, otherwise `0`.
+Addresses that are unreachable from the host (e.g. IPv6 on an IPv4-only machine) are reported as `skipped` and do not count as failures, so `-all-ips` stays clean on single-stack hosts without any flag. Use `-4` / `-6` to restrict the check to one family explicitly.
+
+In JSON mode the result is `{ "domain", "certificates_match", "addresses": [...] }`, where each address is the usual certificate object plus `ip` and `fingerprint` (a skipped address is `{ "ip", "skipped": true, "error" }`, and a real failure `{ "ip", "error" }`). Exit code: `1` if nothing was reachable or an address failed for a real reason, otherwise `2` if the certificates differ or any expires within `-threshold`, otherwise `0`.
 
 </details>
 

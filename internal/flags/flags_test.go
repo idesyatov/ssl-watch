@@ -24,6 +24,7 @@ func TestParse(t *testing.T) {
 		"-output", "json",
 		"-chain",
 		"-all-ips",
+		"-4",
 		"-timeout", "5",
 		"-starttls", "smtp",
 		"-version"}
@@ -73,6 +74,9 @@ func TestParse(t *testing.T) {
 	if !cfg.AllIPs {
 		t.Error("expected all-ips to be true")
 	}
+	if !cfg.IPv4Only {
+		t.Error("expected ipv4-only (-4) to be true")
+	}
 	if !cfg.ShowVersion {
 		t.Error("expected showVersion to be true")
 	}
@@ -120,7 +124,7 @@ func TestUsage(t *testing.T) {
 	parser.Usage()
 
 	out := buf.String()
-	for _, want := range []string{GitURL, "Usage:", "Target:", "Connection:", "Output:", "Monitoring:", "-domain", "-domain-file", "-threshold", "-timeout", "-starttls", "-chain", "-all-ips"} {
+	for _, want := range []string{GitURL, "Usage:", "Target:", "Connection:", "Output:", "Monitoring:", "-domain", "-domain-file", "-threshold", "-timeout", "-starttls", "-chain", "-all-ips", "-4", "-6"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected usage output to contain %q, got:\n%s", want, out)
 		}

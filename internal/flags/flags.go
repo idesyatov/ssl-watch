@@ -27,6 +27,8 @@ type Config struct {
 	Output      string // Output format: "text" or "json"
 	Chain       bool   // Print every certificate in the chain
 	AllIPs      bool   // Check the certificate on every resolved IP of the domain
+	IPv4Only    bool   // Restrict -all-ips to IPv4 addresses
+	IPv6Only    bool   // Restrict -all-ips to IPv6 addresses
 	Timeout     int    // Connection timeout in seconds for fetching a remote certificate
 	StartTLS    string // STARTTLS protocol to upgrade the connection: smtp/imap/pop3/ftp (empty = direct TLS)
 	ShowVersion bool   // Show version and exit
@@ -61,6 +63,8 @@ type DefaultFlagParser struct {
 	output      *string
 	chain       *bool
 	allIPs      *bool
+	ipv4Only    *bool
+	ipv6Only    *bool
 	timeout     *int
 	starttls    *string
 	showVersion *bool
@@ -82,6 +86,8 @@ func (d *DefaultFlagParser) Parse() Config {
 		Output:      *d.output,
 		Chain:       *d.chain,
 		AllIPs:      *d.allIPs,
+		IPv4Only:    *d.ipv4Only,
+		IPv6Only:    *d.ipv6Only,
 		Timeout:     *d.timeout,
 		StartTLS:    *d.starttls,
 		ShowVersion: *d.showVersion,
@@ -115,6 +121,8 @@ func NewDefaultFlagParser() FlagParser {
 		output:      fs.String("output", "text", "Output format: text or json"),
 		chain:       fs.Bool("chain", false, "Print every certificate in the chain"),
 		allIPs:      fs.Bool("all-ips", false, "Check the certificate on every resolved IP of the domain (single domain only)"),
+		ipv4Only:    fs.Bool("4", false, "With -all-ips, check IPv4 addresses only"),
+		ipv6Only:    fs.Bool("6", false, "With -all-ips, check IPv6 addresses only"),
 		timeout:     fs.Int("timeout", 10, "Connection timeout in seconds when fetching a remote certificate"),
 		starttls:    fs.String("starttls", "", "Upgrade the connection via STARTTLS: smtp, imap, pop3 or ftp (default: direct TLS)"),
 		showVersion: fs.Bool("version", false, "Show version"),
@@ -165,6 +173,8 @@ func NewDefaultFlagParser() FlagParser {
 		flagLine("short")
 		flagLine("chain")
 		flagLine("all-ips")
+		flagLine("4")
+		flagLine("6")
 		fmt.Fprintf(out, "\nMonitoring:\n")
 		flagLine("threshold")
 		fmt.Fprintf(out, "\nMisc:\n")

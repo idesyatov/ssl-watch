@@ -348,6 +348,46 @@ func TestPrintAllIPs_AllMatch(t *testing.T) {
 	}
 }
 
+// TestPrintAllIPs_Skipped verifies an unreachable (skipped) address does not
+// count as an error and is reported separately.
+func TestPrintAllIPs_Skipped(t *testing.T) {
+	c := genCert(t, "example.com", time.Now().Add(90*24*time.Hour))
+	results := []IPResult{
+		{IP: "2a02:6b8::2:242", Err: errors.New("connect: network is unreachable"), Skipped: true},
+		{IP: "5.255.255.242", Info: &CertInfo{Cert: c, Chain: []*x509.Certificate{c}, Verified: true}},
+		{IP: "77.88.44.242", Info: &CertInfo{Cert: c, Chain: []*x509.Certificate{c}, Verified: true}},
+	}
+
+	var res AllIPsResult
+	out := captureStdout(t, func() { res = PrintAllIPs("example.com", results, PrintOptions{}) })
+
+	if res.HadError {
+		t.Error("a skipped address must not count as an error")
+	}
+	if res.Skipped != 1 || res.Reachable != 2 {
+		t.Errorf("expected 1 skipped / 2 reachable, got %d / %d", res.Skipped, res.Reachable)
+	}
+	if !res.AllMatch {
+		t.Error("two identical reachable certs should match")
+	}
+	for _, want := range []string{"skipped (unreachable from this host)", "All reachable addresses serve the same certificate", "1 address(es) skipped"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("text output missing %q:\n%s", want, out)
+		}
+	}
+
+	out = captureStdout(t, func() { PrintAllIPs("example.com", results, PrintOptions{JSON: true}) })
+	var got struct {
+		Addresses []map[string]any `json:"addresses"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	if got.Addresses[0]["skipped"] != true {
+		t.Errorf("first address should be marked skipped, got %v", got.Addresses[0])
+	}
+}
+
 // TestFormatPublicKey verifies the algorithm/size rendering for RSA, ECDSA and
 // Ed25519 keys.
 func TestFormatPublicKey(t *testing.T) {

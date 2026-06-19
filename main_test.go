@@ -4,6 +4,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
+	"errors"
 	"io"
 	"math/big"
 	"os"
@@ -77,6 +78,31 @@ func TestResolveVersion(t *testing.T) {
 	version = "dev"
 	if got := resolveVersion(); got == "" {
 		t.Error("expected a non-empty version from the fallback, got empty")
+	}
+}
+
+// TestIsUnreachable verifies that no-route connection errors are classified as
+// skippable, while real failures are not.
+func TestIsUnreachable(t *testing.T) {
+	for _, s := range []string{
+		"failed to connect to [2a02:6b8::2:242]:443: dial tcp: connect: network is unreachable",
+		"dial tcp 1.2.3.4:443: connect: no route to host",
+	} {
+		if !isUnreachable(errors.New(s)) {
+			t.Errorf("expected %q to be unreachable", s)
+		}
+	}
+	for _, s := range []string{
+		"dial tcp 1.2.3.4:443: connect: connection refused",
+		"dial tcp 1.2.3.4:443: i/o timeout",
+		"tls: handshake failure",
+	} {
+		if isUnreachable(errors.New(s)) {
+			t.Errorf("expected %q NOT to be unreachable", s)
+		}
+	}
+	if isUnreachable(nil) {
+		t.Error("nil error should not be unreachable")
 	}
 }
 

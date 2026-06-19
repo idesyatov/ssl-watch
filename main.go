@@ -116,6 +116,18 @@ func main() {
 		}
 	}
 
+	// -4/-6 restrict the address family and only make sense with -all-ips
+	if cfg.IPv4Only && cfg.IPv6Only {
+		fmt.Fprintf(os.Stderr, "Error: -4 and -6 cannot be combined\n\n")
+		parser.Usage()
+		os.Exit(1)
+	}
+	if (cfg.IPv4Only || cfg.IPv6Only) && !cfg.AllIPs {
+		fmt.Fprintf(os.Stderr, "Error: -4/-6 can only be used with -all-ips\n\n")
+		parser.Usage()
+		os.Exit(1)
+	}
+
 	// Validate the STARTTLS protocol and pick the protocol's default port when
 	// the port was left at its default.
 	if cfg.StartTLS != "" {
@@ -244,10 +256,12 @@ func runBatch(fetcher cert.CertificateFetcher, printer cert.CertificatePrinter, 
 	return 0
 }
 
-// runAllIPs resolves every address of the domain, checks the certificate on each
-// (same SNI), prints the per-address result and reports the exit code: 1 if any
-// address could not be checked, otherwise 2 if the certificates differ or any
-// expires within -threshold, otherwise 0.
+// runAllIPs resolves every address of the domain (optionally filtered to one
+// family by -4/-6), checks the certificate on each (same SNI), prints the
+// per-address result and reports the exit code: 1 if nothing was reachable or an
+// address failed for a real reason (addresses unreachable from this host are
+// skipped, not errors), otherwise 2 if the certificates differ or any expires
+// within -threshold, otherwise 0.
 func runAllIPs(fetcher cert.CertificateFetcher, domain string, cfg flags.Config, opts cert.PrintOptions, timeout time.Duration) int {
 	ips, err := net.LookupIP(domain)
 	if err != nil {
@@ -258,6 +272,12 @@ func runAllIPs(fetcher cert.CertificateFetcher, domain string, cfg flags.Config,
 	seen := make(map[string]bool)
 	var addrs []string
 	for _, ip := range ips {
+		if cfg.IPv4Only && ip.To4() == nil {
+			continue
+		}
+		if cfg.IPv6Only && ip.To4() != nil {
+			continue
+		}
 		s := ip.String()
 		if !seen[s] {
 			seen[s] = true
@@ -265,7 +285,7 @@ func runAllIPs(fetcher cert.CertificateFetcher, domain string, cfg flags.Config,
 		}
 	}
 	if len(addrs) == 0 {
-		fmt.Fprintf(os.Stderr, "Error: no addresses resolved for %s\n", domain)
+		fmt.Fprintf(os.Stderr, "Error: no matching addresses resolved for %s\n", domain)
 		return 1
 	}
 	sort.Strings(addrs)
@@ -273,11 +293,18 @@ func runAllIPs(fetcher cert.CertificateFetcher, domain string, cfg flags.Config,
 	results := make([]cert.IPResult, 0, len(addrs))
 	for _, ip := range addrs {
 		info, err := fetcher.Fetch(domain, cfg.Port, ip, cfg.Insecure, timeout, cfg.StartTLS)
-		results = append(results, cert.IPResult{IP: ip, Info: info, Err: err})
+		results = append(results, cert.IPResult{
+			IP:      ip,
+			Info:    info,
+			Err:     err,
+			Skipped: err != nil && isUnreachable(err),
+		})
 	}
 
 	res := cert.PrintAllIPs(domain, results, opts)
 	switch {
+	case res.Reachable == 0:
+		return 1
 	case res.HadError:
 		return 1
 	case !res.AllMatch:
@@ -286,6 +313,19 @@ func runAllIPs(fetcher cert.CertificateFetcher, domain string, cfg flags.Config,
 		return 2
 	}
 	return 0
+}
+
+// isUnreachable reports whether a connection error means the address family is
+// not routable from this host (e.g. no IPv6 route) — a benign skip rather than a
+// real failure. Matched by message text to stay portable (the syscall error
+// constants differ on Windows).
+func isUnreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "network is unreachable") ||
+		strings.Contains(s, "no route to host")
 }
 
 // resolveDomains builds the ordered, de-duplicated list of domains from the
