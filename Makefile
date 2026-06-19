@@ -53,26 +53,21 @@ clean:
 	@go clean -cache
 	@rm -f $(BIN_FILE) || echo "Could not remove binary file"
 
-# Release target
-SOURCE_BRANCH ?= dev
-TARGET_BRANCH ?= master
+# Release target — tag the current branch and push (run from RELEASE_BRANCH).
+RELEASE_BRANCH ?= master
 
 release:
 ifndef VERSION
 	$(error VERSION is not set. Usage: make release VERSION=v1.0.7)
 endif
 	@set -e; \
-	echo "Releasing $(VERSION): $(SOURCE_BRANCH) -> $(TARGET_BRANCH)"; \
+	branch=$$(git rev-parse --abbrev-ref HEAD); \
+	echo "Releasing $(VERSION) from $$branch"; \
+	[ "$$branch" = "$(RELEASE_BRANCH)" ] || { echo "Not on $(RELEASE_BRANCH) (on $$branch). Switch first or set RELEASE_BRANCH."; exit 1; }; \
 	git diff --quiet && git diff --cached --quiet || { echo "Worktree is dirty. Commit or stash changes first."; exit 1; }; \
 	git rev-parse $(VERSION) >/dev/null 2>&1 && { echo "Tag $(VERSION) already exists."; exit 1; } || true; \
 	git fetch origin; \
-	trap 'git checkout $(SOURCE_BRANCH) >/dev/null 2>&1 || true' EXIT INT TERM; \
-	git checkout $(SOURCE_BRANCH); \
-	git push origin $(SOURCE_BRANCH); \
-	git checkout $(TARGET_BRANCH); \
-	git pull --ff-only origin $(TARGET_BRANCH); \
-	git merge --no-ff $(SOURCE_BRANCH) -m "Merge $(SOURCE_BRANCH) for $(VERSION)"; \
-	git push origin $(TARGET_BRANCH); \
+	git push origin $$branch; \
 	git tag $(VERSION); \
 	git push origin $(VERSION); \
 	echo "Done. Watch: https://github.com/idesyatov/ssl-watch/actions"
@@ -89,8 +84,7 @@ help:
 	@echo "  make build-docker  - Build the binary in the Go container"
 	@echo "  make lint-docker   - Run golangci-lint in its container"
 	@echo "  make clean         - Remove all generated build artifacts and cached files"
-	@echo "  make release       - Merge SOURCE_BRANCH -> TARGET_BRANCH, tag and push"
+	@echo "  make release       - Push the current branch, tag VERSION and push the tag"
 	@echo "                      (example: make release VERSION=v1.0.7)"
-	@echo "                      Defaults: SOURCE_BRANCH=dev, TARGET_BRANCH=master"
-	@echo "                      Worktree must be clean — commit your changes first."
+	@echo "                      Must be on RELEASE_BRANCH (default: master), worktree clean"
 	@echo "  make help          - Display this help message"
