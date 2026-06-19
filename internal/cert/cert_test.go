@@ -286,7 +286,7 @@ func TestPrintAllIPs(t *testing.T) {
 	same := genCert(t, "example.com", now.Add(90*24*time.Hour))
 	diff := genCert(t, "example.com", now.Add(8*24*time.Hour))
 	results := []IPResult{
-		{IP: "203.0.113.10", Info: &CertInfo{Cert: same, Chain: []*x509.Certificate{same}, Verified: true}},
+		{IP: "203.0.113.10", Info: &CertInfo{Cert: same, Chain: []*x509.Certificate{same}, Verified: true, UsedIP: "203.0.113.10"}},
 		{IP: "203.0.113.11", Info: &CertInfo{Cert: same, Chain: []*x509.Certificate{same}, Verified: true}},
 		{IP: "203.0.113.12", Info: &CertInfo{Cert: diff, Chain: []*x509.Certificate{diff}, Verified: true}},
 		{IP: "203.0.113.13", Err: errors.New("connection refused")},
@@ -324,6 +324,9 @@ func TestPrintAllIPs(t *testing.T) {
 	}
 	if got.Addresses[0]["ip"] != "203.0.113.10" || got.Addresses[0]["fingerprint"] == nil {
 		t.Errorf("first address should carry ip+fingerprint, got %v", got.Addresses[0])
+	}
+	if _, ok := got.Addresses[0]["used_ip"]; ok {
+		t.Errorf("used_ip is redundant in -all-ips and must be omitted, got %v", got.Addresses[0])
 	}
 	if got.Addresses[3]["error"] == nil {
 		t.Errorf("last address should be an error entry, got %v", got.Addresses[3])

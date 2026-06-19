@@ -768,6 +768,7 @@ func printAllIPsJSON(domain string, results []IPResult, opts PrintOptions) {
 		default:
 			p := buildPayload(r.Info, "", opts.Chain)
 			p.IP = r.IP
+			p.UsedIP = "" // redundant in -all-ips: identical to ip
 			p.Fingerprint = Fingerprint(r.Info.Cert)
 			addresses = append(addresses, p)
 		}
