@@ -21,6 +21,10 @@ BINDIR="${BINDIR:-/usr/local/bin}"
 # unquoted on purpose so the options word-split into separate arguments.
 CURL_OPTS="--connect-timeout 15 --max-time 180 --retry 2 --retry-delay 1"
 
+# fetch runs curl with the standard options and, if that fails, retries forcing
+# IPv4 — some networks stall on a broken IPv6 route to the GitHub/CDN endpoint.
+fetch() { curl -fsSL $CURL_OPTS "$@" || curl -4 -fsSL $CURL_OPTS "$@"; }
+
 err() { echo "error: $*" >&2; exit 1; }
 
 # sha256_of prints the SHA-256 hex digest of a file using whatever tool is
@@ -85,7 +89,7 @@ esac
 version="${VERSION:-}"
 if [ -z "$version" ]; then
   echo "Resolving latest $BINARY release..."
-  version=$(curl -fsSL $CURL_OPTS -o /dev/null -w '%{url_effective}' \
+  version=$(fetch -o /dev/null -w '%{url_effective}' \
     "https://github.com/$REPO/releases/latest" | sed 's#.*/##')
   [ -n "$version" ] || err "could not determine the latest version (network/GitHub unreachable?)"
 fi
@@ -100,10 +104,10 @@ echo "Installing $BINARY $version ($os/$arch) -> $BINDIR"
 # --- download into a temp dir ---
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-curl -fsSL $CURL_OPTS "$url" -o "$tmp/$asset" || err "download failed: $url"
+fetch "$url" -o "$tmp/$asset" || err "download failed: $url"
 
 # --- verify the SHA-256 checksum before installing ---
-curl -fsSL $CURL_OPTS "$checksums_url" -o "$tmp/checksums.txt" || err "failed to download checksums.txt for verification"
+fetch "$checksums_url" -o "$tmp/checksums.txt" || err "failed to download checksums.txt for verification"
 expected=$(awk -v f="$asset" '$2 == f {print $1}' "$tmp/checksums.txt")
 [ -n "$expected" ] || err "checksum for $asset not found in checksums.txt"
 actual=$(sha256_of "$tmp/$asset") || err "no sha256 tool (sha256sum or shasum) available to verify the download"
