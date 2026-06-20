@@ -232,7 +232,7 @@ func printAllIPsJSON(domain string, results []IPResult, opts PrintOptions) {
 				Error string `json:"error"`
 			}{IP: r.IP, Error: r.Err.Error()})
 		default:
-			p := buildPayload(r.Info, "", opts.Chain, opts.Fingerprint, opts.Pin)
+			p := buildPayload(r.Info, "", payloadOptions{IncludeChain: opts.Chain, IncludeFingerprint: opts.Fingerprint, Pin: opts.Pin})
 			p.IP = r.IP
 			p.UsedIP = "" // redundant in -all-ips: identical to ip
 			p.Fingerprint = Fingerprint(r.Info.Cert)

@@ -36,6 +36,14 @@ func resolveVersion() string {
 	return version
 }
 
+// Process exit codes (see the README's "Exit codes" section).
+const (
+	exitOK       = 0 // success
+	exitError    = 1 // operational error: could not check, or invalid arguments
+	exitSoft     = 2 // soft problem: expiring within -threshold, a -strict warning, or differing certs
+	exitMismatch = 3 // explicit expectation failed: -pin or -expect-issuer
+)
+
 // defaultPort mirrors the -port flag default; when -starttls is used and the
 // port was left at this value, the protocol's standard port is substituted.
 const defaultPort = "443"
@@ -65,7 +73,7 @@ func main() {
 	domains, err := resolveDomains(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		os.Exit(exitError)
 	}
 
 	// Reject unsupported flag combinations up front. validate is pure (no I/O,
@@ -73,7 +81,7 @@ func main() {
 	if err := validate(cfg, domains); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
 		parser.Usage()
-		os.Exit(1)
+		os.Exit(exitError)
 	}
 
 	// -pin produces the normalized hex used for the match (validate already
@@ -84,7 +92,7 @@ func main() {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: invalid -pin: %v\n\n", err)
 			parser.Usage()
-			os.Exit(1)
+			os.Exit(exitError)
 		}
 	}
 
@@ -123,7 +131,7 @@ func main() {
 		roots, loadErr := cert.LoadCAFile(cfg.CAFile)
 		if loadErr != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", loadErr)
-			os.Exit(1)
+			os.Exit(exitError)
 		}
 		fetchOpts.Roots = roots
 	}
@@ -257,16 +265,16 @@ func runExport(info *cert.CertInfo, cfg flags.Config) int {
 	if cfg.Export != "" {
 		if err := os.WriteFile(cfg.Export, pemBytes, 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: failed to write %s: %v\n", cfg.Export, err)
-			return 1
+			return exitError
 		}
 		fmt.Printf("Wrote %d certificate(s) to %s\n", strings.Count(string(pemBytes), "BEGIN CERTIFICATE"), cfg.Export)
-		return 0
+		return exitOK
 	}
 	if _, err := os.Stdout.Write(pemBytes); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to write PEM: %v\n", err)
-		return 1
+		return exitError
 	}
-	return 0
+	return exitOK
 }
 
 // runPrometheus fetches every domain and writes the results in Prometheus
@@ -292,11 +300,11 @@ func runPrometheus(fetcher cert.CertificateFetcher, domains []string, cfg flags.
 	cert.WritePrometheus(os.Stdout, samples, pinHex)
 	switch {
 	case hadError:
-		return 1
+		return exitError
 	case expiring:
-		return 2
+		return exitSoft
 	}
-	return 0
+	return exitOK
 }
 
 // printSingle prints one certificate and exits with code 2 when it expires
@@ -307,18 +315,18 @@ func printSingle(printer cert.CertificatePrinter, info *cert.CertInfo, cfg flags
 	// (a pinned fingerprint or the issuer) — a wrong cert is more urgent than an
 	// upcoming expiry, so it takes precedence.
 	if opts.Pin != "" && !cert.MatchesPin(info.Cert, opts.Pin) {
-		os.Exit(3)
+		os.Exit(exitMismatch)
 	}
 	if cfg.ExpectIssuer != "" && !cert.IssuerMatches(info.Cert, cfg.ExpectIssuer) {
-		os.Exit(3)
+		os.Exit(exitMismatch)
 	}
 	// Exit code 2 for soft problems: with -strict any warning fails, and any
 	// certificate in the chain expiring within -threshold fails.
 	if cfg.Strict && cert.HasWarnings(info) {
-		os.Exit(2)
+		os.Exit(exitSoft)
 	}
 	if cfg.Threshold > 0 && info.MinDaysUntilExpiry() < cfg.Threshold {
-		os.Exit(2)
+		os.Exit(exitSoft)
 	}
 }
 
@@ -376,20 +384,20 @@ func runBatch(fetcher cert.CertificateFetcher, printer cert.CertificatePrinter, 
 		b, err := json.MarshalIndent(entries, "", "  ")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: failed to encode JSON: %v\n", err)
-			return 1
+			return exitError
 		}
 		fmt.Println(string(b))
 	}
 
 	switch {
 	case hadError:
-		return 1
+		return exitError
 	case issuerFail:
-		return 3
+		return exitMismatch
 	case expiring || strictFail:
-		return 2
+		return exitSoft
 	}
-	return 0
+	return exitOK
 }
 
 // runAllIPs resolves every address of the domain (optionally filtered to one
@@ -402,7 +410,7 @@ func runAllIPs(fetcher cert.CertificateFetcher, domain string, cfg flags.Config,
 	ips, err := net.LookupIP(domain)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to resolve %s: %v\n", domain, err)
-		return 1
+		return exitError
 	}
 
 	seen := make(map[string]bool)
@@ -422,7 +430,7 @@ func runAllIPs(fetcher cert.CertificateFetcher, domain string, cfg flags.Config,
 	}
 	if len(addrs) == 0 {
 		fmt.Fprintf(os.Stderr, "Error: no matching addresses resolved for %s\n", domain)
-		return 1
+		return exitError
 	}
 	sort.Strings(addrs)
 
@@ -440,17 +448,17 @@ func runAllIPs(fetcher cert.CertificateFetcher, domain string, cfg flags.Config,
 	res := cert.PrintAllIPs(domain, results, opts)
 	switch {
 	case res.Reachable == 0:
-		return 1
+		return exitError
 	case res.HadError:
-		return 1
+		return exitError
 	case res.PinMismatch:
-		return 3
+		return exitMismatch
 	case !res.AllMatch:
-		return 2
+		return exitSoft
 	case cfg.Threshold > 0 && res.MinDays < cfg.Threshold:
-		return 2
+		return exitSoft
 	}
-	return 0
+	return exitOK
 }
 
 // isUnreachable reports whether a connection error means the address family is

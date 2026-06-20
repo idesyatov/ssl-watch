@@ -193,12 +193,16 @@ type certPayload struct {
 	Chain         []chainCert  `json:"chain,omitempty"`
 }
 
+// payloadOptions selects the optional fields included when building the JSON view.
+type payloadOptions struct {
+	IncludeChain       bool   // add the full "chain" array
+	IncludeFingerprint bool   // add the cert and public-key SHA-256 fingerprints
+	Pin                string // when non-empty, add the "pin_match" verdict
+}
+
 // buildPayload assembles the JSON view of a certificate, tagged with domain
-// (empty domain is omitted from the output). When includeChain is set, the full
-// chain is added under the "chain" field. When includeFingerprint is set the
-// cert and public-key SHA-256 fingerprints are added; when pin is non-empty a
-// "pin_match" verdict is added.
-func buildPayload(info *CertInfo, domain string, includeChain, includeFingerprint bool, pin string) certPayload {
+// (empty domain is omitted from the output); opts selects the optional fields.
+func buildPayload(info *CertInfo, domain string, opts payloadOptions) certPayload {
 	cert := info.Cert
 	out := certPayload{
 		Domain:        domain,
@@ -234,15 +238,15 @@ func buildPayload(info *CertInfo, domain string, includeChain, includeFingerprin
 	if early := earliestExpiringBefore(info.Chain); early != nil {
 		out.ChainExpiry = &chainExpiry{Subject: subjectName(early), DaysRemaining: DaysUntilExpiry(early)}
 	}
-	if includeFingerprint {
+	if opts.IncludeFingerprint {
 		out.Fingerprint = Fingerprint(cert)
 		out.SPKIFinger = SPKIFingerprint(cert)
 	}
-	if pin != "" {
-		m := MatchesPin(cert, pin)
+	if opts.Pin != "" {
+		m := MatchesPin(cert, opts.Pin)
 		out.PinMatch = &m
 	}
-	if includeChain {
+	if opts.IncludeChain {
 		for _, c := range chainList(info) {
 			out.Chain = append(out.Chain, chainCert{
 				Subject:       subjectName(c),
@@ -260,7 +264,7 @@ func buildPayload(info *CertInfo, domain string, includeChain, includeFingerprin
 // added; when includeFingerprint is set the SHA-256 fingerprints are added. Used
 // to assemble the array emitted for multi-domain runs.
 func Payload(info *CertInfo, domain string, includeChain, includeFingerprint bool) any {
-	return buildPayload(info, domain, includeChain, includeFingerprint, "")
+	return buildPayload(info, domain, payloadOptions{IncludeChain: includeChain, IncludeFingerprint: includeFingerprint})
 }
 
 // ErrorPayload returns a JSON-serializable entry describing a domain that could
@@ -274,7 +278,7 @@ func ErrorPayload(domain, errMsg string) any {
 
 // printJSON renders a single certificate as indented JSON.
 func (p *CertificatePrinterImpl) printJSON(info *CertInfo, opts PrintOptions) {
-	b, err := json.MarshalIndent(buildPayload(info, "", opts.Chain, opts.Fingerprint, opts.Pin), "", "  ")
+	b, err := json.MarshalIndent(buildPayload(info, "", payloadOptions{IncludeChain: opts.Chain, IncludeFingerprint: opts.Fingerprint, Pin: opts.Pin}), "", "  ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to encode JSON: %v\n", err)
 		return
