@@ -279,6 +279,155 @@ func TestFingerprint(t *testing.T) {
 	}
 }
 
+// certFromKey issues a self-signed certificate from a caller-provided key, so two
+// certs can deliberately share a public key (to exercise SPKI pinning).
+func certFromKey(t *testing.T, key *rsa.PrivateKey, serial *big.Int, notAfter time.Time) *x509.Certificate {
+	t.Helper()
+	tmpl := x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: "reissue.example"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     notAfter,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	c, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	return c
+}
+
+// TestSPKIFingerprint verifies the public-key fingerprint is stable, distinguishes
+// different keys, and — unlike the cert fingerprint — survives a reissue that keeps
+// the same key.
+func TestSPKIFingerprint(t *testing.T) {
+	a := genCert(t, "a.example", time.Now().Add(90*24*time.Hour))
+	b := genCert(t, "b.example", time.Now().Add(90*24*time.Hour))
+
+	fp := SPKIFingerprint(a)
+	if len(fp) != 64 {
+		t.Errorf("expected 64 hex chars, got %d", len(fp))
+	}
+	if fp != SPKIFingerprint(a) {
+		t.Error("SPKI fingerprint should be stable")
+	}
+	if fp == SPKIFingerprint(b) {
+		t.Error("different keys should have different SPKI fingerprints")
+	}
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+	c1 := certFromKey(t, key, big.NewInt(1), time.Now().Add(30*24*time.Hour))
+	c2 := certFromKey(t, key, big.NewInt(2), time.Now().Add(400*24*time.Hour))
+	if SPKIFingerprint(c1) != SPKIFingerprint(c2) {
+		t.Error("same key should yield the same SPKI fingerprint across reissues")
+	}
+	if Fingerprint(c1) == Fingerprint(c2) {
+		t.Error("different certs should have different cert fingerprints")
+	}
+}
+
+// TestNormalizePin covers the accepted shapes and the rejected ones.
+func TestNormalizePin(t *testing.T) {
+	const want = "e4134cbc32c0c0976599c684ae0b6ac849b2d75546d934dfdb611fa0d9a0e9cb"
+	var pairs []string
+	for i := 0; i < len(want); i += 2 {
+		pairs = append(pairs, want[i:i+2])
+	}
+	colonized := "sha256:" + strings.Join(pairs, ":")
+
+	for _, in := range []string{"sha256:" + want, "SHA256:" + strings.ToUpper(want), "  sha256:" + want + "  ", colonized} {
+		got, err := NormalizePin(in)
+		if err != nil {
+			t.Errorf("NormalizePin(%q) unexpected error: %v", in, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("NormalizePin(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	for _, in := range []string{want, "md5:" + want, "sha256:abc", "sha256:" + strings.Repeat("z", 64)} {
+		if _, err := NormalizePin(in); err == nil {
+			t.Errorf("NormalizePin(%q) expected error, got nil", in)
+		}
+	}
+}
+
+// TestMatchesPin verifies a pin matches the cert or the SPKI fingerprint, and
+// nothing else.
+func TestMatchesPin(t *testing.T) {
+	c := genCert(t, "pin.example", time.Now().Add(90*24*time.Hour))
+	if !MatchesPin(c, Fingerprint(c)) {
+		t.Error("should match the cert fingerprint")
+	}
+	if !MatchesPin(c, SPKIFingerprint(c)) {
+		t.Error("should match the SPKI fingerprint")
+	}
+	if MatchesPin(c, strings.Repeat("0", 64)) {
+		t.Error("should not match an unrelated pin")
+	}
+}
+
+// TestPrint_Fingerprint verifies the two fingerprint lines appear only with the flag.
+func TestPrint_Fingerprint(t *testing.T) {
+	c := genCert(t, "fp.example", time.Now().Add(90*24*time.Hour))
+	info := &CertInfo{Cert: c}
+	printer := &CertificatePrinterImpl{}
+
+	out := captureStdout(t, func() { printer.Print(info, PrintOptions{Fingerprint: true}) })
+	for _, want := range []string{"SHA-256 (cert): " + Fingerprint(c), "SHA-256 (pubkey): " + SPKIFingerprint(c)} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in:\n%s", want, out)
+		}
+	}
+	out = captureStdout(t, func() { printer.Print(info, PrintOptions{}) })
+	if strings.Contains(out, "SHA-256 (") {
+		t.Errorf("fingerprints should be hidden without -fingerprint:\n%s", out)
+	}
+}
+
+// TestPrint_Pin verifies the pin verdict in text (match/mismatch) and JSON.
+func TestPrint_Pin(t *testing.T) {
+	c := genCert(t, "pin.example", time.Now().Add(90*24*time.Hour))
+	info := &CertInfo{Cert: c}
+	printer := &CertificatePrinterImpl{}
+
+	out := captureStdout(t, func() { printer.Print(info, PrintOptions{Pin: Fingerprint(c)}) })
+	if !strings.Contains(out, "Pin: MATCH") {
+		t.Errorf("expected Pin: MATCH, got:\n%s", out)
+	}
+
+	out = captureStdout(t, func() { printer.Print(info, PrintOptions{Pin: strings.Repeat("0", 64)}) })
+	if !strings.Contains(out, "Pin: MISMATCH") {
+		t.Errorf("expected Pin: MISMATCH, got:\n%s", out)
+	}
+	if !strings.Contains(out, Fingerprint(c)) {
+		t.Errorf("a mismatch should show the actual cert fingerprint, got:\n%s", out)
+	}
+
+	mustPinMatch := func(pin string, expect bool) {
+		t.Helper()
+		out := captureStdout(t, func() { printer.Print(info, PrintOptions{JSON: true, Pin: pin}) })
+		var got struct {
+			PinMatch *bool `json:"pin_match"`
+		}
+		if err := json.Unmarshal([]byte(out), &got); err != nil {
+			t.Fatalf("invalid JSON: %v\n%s", err, out)
+		}
+		if got.PinMatch == nil || *got.PinMatch != expect {
+			t.Errorf("expected pin_match %v, got %v", expect, got.PinMatch)
+		}
+	}
+	mustPinMatch(SPKIFingerprint(c), true)
+	mustPinMatch(strings.Repeat("0", 64), false)
+}
+
 // TestPrintAllIPs verifies the per-address table, the "differ" verdict and the
 // JSON object, including the AllIPsResult summary.
 func TestPrintAllIPs(t *testing.T) {

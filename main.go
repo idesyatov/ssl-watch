@@ -132,6 +132,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	// -pin verifies one cert against an expected fingerprint, so a single pin
+	// makes sense only for a single target (one domain, a file, or -all-ips).
+	var pinHex string
+	if cfg.Pin != "" {
+		if len(domains) > 1 {
+			fmt.Fprintf(os.Stderr, "Error: -pin cannot be combined with multiple domains\n\n")
+			parser.Usage()
+			os.Exit(1)
+		}
+		pinHex, err = cert.NormalizePin(cfg.Pin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: invalid -pin: %v\n\n", err)
+			parser.Usage()
+			os.Exit(1)
+		}
+	}
+
 	// Validate the STARTTLS protocol and pick the protocol's default port when
 	// the port was left at its default.
 	if cfg.StartTLS != "" {
@@ -152,11 +169,13 @@ func main() {
 	var printer cert.CertificatePrinter = &cert.CertificatePrinterImpl{}
 
 	opts := cert.PrintOptions{
-		Short:     cfg.Short,
-		JSON:      cfg.Output == "json",
-		Threshold: cfg.Threshold,
-		Color:     useColor(cfg),
-		Chain:     cfg.Chain,
+		Short:       cfg.Short,
+		JSON:        cfg.Output == "json",
+		Threshold:   cfg.Threshold,
+		Color:       useColor(cfg),
+		Chain:       cfg.Chain,
+		Fingerprint: cfg.Fingerprint,
+		Pin:         pinHex,
 	}
 	timeout := time.Duration(cfg.Timeout) * time.Second
 
@@ -192,6 +211,11 @@ func main() {
 // within the configured threshold.
 func printSingle(printer cert.CertificatePrinter, info *cert.CertInfo, cfg flags.Config, opts cert.PrintOptions) {
 	printer.Print(info, opts)
+	// Exit code 3 when a pinned fingerprint does not match — a wrong/forged cert
+	// is more urgent than an upcoming expiry, so it takes precedence.
+	if opts.Pin != "" && !cert.MatchesPin(info.Cert, opts.Pin) {
+		os.Exit(3)
+	}
 	// Exit code 2 when any certificate in the chain (leaf or an intermediate)
 	// expires within the configured threshold, so the tool can drive alerts in
 	// cron/CI off the weakest link.
@@ -225,7 +249,7 @@ func runBatch(fetcher cert.CertificateFetcher, printer cert.CertificatePrinter, 
 		}
 
 		if opts.JSON {
-			entries = append(entries, cert.Payload(info, d, opts.Chain))
+			entries = append(entries, cert.Payload(info, d, opts.Chain, opts.Fingerprint))
 		} else {
 			if printedText && !cfg.Short {
 				fmt.Println()
@@ -311,6 +335,8 @@ func runAllIPs(fetcher cert.CertificateFetcher, domain string, cfg flags.Config,
 		return 1
 	case res.HadError:
 		return 1
+	case res.PinMismatch:
+		return 3
 	case !res.AllMatch:
 		return 2
 	case cfg.Threshold > 0 && res.MinDays < cfg.Threshold:

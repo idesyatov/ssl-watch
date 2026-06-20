@@ -58,6 +58,9 @@ type PrintOptions struct {
 	Threshold int  // Days threshold for the expiry warning highlight (0 = disabled)
 	Color     bool // Colorize the human-readable output
 	Chain     bool // Print every certificate in the chain
+
+	Fingerprint bool   // Print the certificate and public-key SHA-256 fingerprints
+	Pin         string // Normalized hex pin to verify against (empty = disabled)
 }
 
 // CertificatePrinter defines an interface for printing certificate details.
@@ -200,6 +203,39 @@ func notServerAuth(c *x509.Certificate) bool {
 func Fingerprint(c *x509.Certificate) string {
 	sum := sha256.Sum256(c.Raw)
 	return hex.EncodeToString(sum[:])
+}
+
+// SPKIFingerprint returns the lower-case hex SHA-256 of the certificate's
+// SubjectPublicKeyInfo (the public key). Unlike Fingerprint it is stable across
+// reissues that keep the same key, which makes it useful for pinning that should
+// survive a routine renewal.
+func SPKIFingerprint(c *x509.Certificate) string {
+	sum := sha256.Sum256(c.RawSubjectPublicKeyInfo)
+	return hex.EncodeToString(sum[:])
+}
+
+// NormalizePin parses a pin of the form "sha256:<hex>" into the bare lower-case
+// hex digest. Colons inside the hex are tolerated (paste-friendly) and the digest
+// must be 32 bytes (64 hex chars). It returns an error for any other shape.
+func NormalizePin(raw string) (string, error) {
+	rest, ok := strings.CutPrefix(strings.ToLower(strings.TrimSpace(raw)), "sha256:")
+	if !ok {
+		return "", fmt.Errorf("pin must start with \"sha256:\"")
+	}
+	rest = strings.ReplaceAll(rest, ":", "")
+	if len(rest) != 64 {
+		return "", fmt.Errorf("pin must be a 64-character hex SHA-256 digest")
+	}
+	if _, err := hex.DecodeString(rest); err != nil {
+		return "", fmt.Errorf("pin is not valid hex: %v", err)
+	}
+	return rest, nil
+}
+
+// MatchesPin reports whether the normalized pin (see NormalizePin) equals either
+// the certificate's SHA-256 fingerprint or its public-key (SPKI) fingerprint.
+func MatchesPin(c *x509.Certificate, pin string) bool {
+	return pin == Fingerprint(c) || pin == SPKIFingerprint(c)
 }
 
 // CertificateFetcherImpl is an implementation of the CertificateFetcher interface.
@@ -443,7 +479,7 @@ func (p *CertificatePrinterImpl) Print(info *CertInfo, opts PrintOptions) {
 
 	switch {
 	case opts.JSON:
-		p.printJSON(info, opts.Chain)
+		p.printJSON(info, opts)
 	case opts.Short:
 		fmt.Println(days)
 	default:
@@ -479,6 +515,11 @@ func (p *CertificatePrinterImpl) printText(info *CertInfo, days int, opts PrintO
 	}
 	fmt.Printf("Public key: %s\n", pubKey)
 
+	if opts.Fingerprint {
+		fmt.Printf("SHA-256 (cert): %s\n", Fingerprint(cert))
+		fmt.Printf("SHA-256 (pubkey): %s\n", SPKIFingerprint(cert))
+	}
+
 	fmt.Printf("Valid from: %s\n", cert.NotBefore)
 	fmt.Printf("Expires on: %s\n", cert.NotAfter)
 
@@ -495,6 +536,13 @@ func (p *CertificatePrinterImpl) printText(info *CertInfo, days int, opts PrintO
 			fmt.Printf("Chain: %s\n", maybeColor("VALID", colorGreen, opts.Color))
 		} else {
 			fmt.Printf("Chain: %s (%v)\n", maybeColor("INVALID", colorRed, opts.Color), info.ChainErr)
+		}
+	}
+	if opts.Pin != "" {
+		if MatchesPin(cert, opts.Pin) {
+			fmt.Printf("Pin: %s\n", maybeColor("MATCH", colorGreen, opts.Color))
+		} else {
+			fmt.Printf("Pin: %s (got SHA-256 cert %s)\n", maybeColor("MISMATCH", colorRed, opts.Color), Fingerprint(cert))
 		}
 	}
 
@@ -564,6 +612,8 @@ type certPayload struct {
 	Domain        string       `json:"domain,omitempty"`
 	IP            string       `json:"ip,omitempty"`
 	Fingerprint   string       `json:"fingerprint,omitempty"`
+	SPKIFinger    string       `json:"spki_fingerprint,omitempty"`
+	PinMatch      *bool        `json:"pin_match,omitempty"`
 	CommonName    string       `json:"common_name"`
 	Subject       string       `json:"subject"`
 	Issuer        string       `json:"issuer"`
@@ -590,8 +640,10 @@ type certPayload struct {
 
 // buildPayload assembles the JSON view of a certificate, tagged with domain
 // (empty domain is omitted from the output). When includeChain is set, the full
-// chain is added under the "chain" field.
-func buildPayload(info *CertInfo, domain string, includeChain bool) certPayload {
+// chain is added under the "chain" field. When includeFingerprint is set the
+// cert and public-key SHA-256 fingerprints are added; when pin is non-empty a
+// "pin_match" verdict is added.
+func buildPayload(info *CertInfo, domain string, includeChain, includeFingerprint bool, pin string) certPayload {
 	cert := info.Cert
 	out := certPayload{
 		Domain:        domain,
@@ -624,6 +676,14 @@ func buildPayload(info *CertInfo, domain string, includeChain bool) certPayload 
 	if early := earliestExpiringBefore(info.Chain); early != nil {
 		out.ChainExpiry = &chainExpiry{Subject: subjectName(early), DaysRemaining: DaysUntilExpiry(early)}
 	}
+	if includeFingerprint {
+		out.Fingerprint = Fingerprint(cert)
+		out.SPKIFinger = SPKIFingerprint(cert)
+	}
+	if pin != "" {
+		m := MatchesPin(cert, pin)
+		out.PinMatch = &m
+	}
 	if includeChain {
 		for _, c := range chainList(info) {
 			out.Chain = append(out.Chain, chainCert{
@@ -639,9 +699,10 @@ func buildPayload(info *CertInfo, domain string, includeChain bool) certPayload 
 
 // Payload returns the JSON-serializable view of a certificate, tagged with the
 // given domain (omitted when empty). When includeChain is set, the full chain is
-// added. Used to assemble the array emitted for multi-domain runs.
-func Payload(info *CertInfo, domain string, includeChain bool) any {
-	return buildPayload(info, domain, includeChain)
+// added; when includeFingerprint is set the SHA-256 fingerprints are added. Used
+// to assemble the array emitted for multi-domain runs.
+func Payload(info *CertInfo, domain string, includeChain, includeFingerprint bool) any {
+	return buildPayload(info, domain, includeChain, includeFingerprint, "")
 }
 
 // ErrorPayload returns a JSON-serializable entry describing a domain that could
@@ -665,11 +726,12 @@ type IPResult struct {
 
 // AllIPsResult summarizes an all-ips run, for the caller's exit code.
 type AllIPsResult struct {
-	AllMatch  bool // every reachable address served the same certificate
-	HadError  bool // at least one address failed for a real reason (not just skipped)
-	Reachable int  // addresses that were actually checked
-	Skipped   int  // addresses skipped as unreachable from this host
-	MinDays   int  // smallest days-until-expiry across reachable addresses
+	AllMatch    bool // every reachable address served the same certificate
+	HadError    bool // at least one address failed for a real reason (not just skipped)
+	Reachable   int  // addresses that were actually checked
+	Skipped     int  // addresses skipped as unreachable from this host
+	MinDays     int  // smallest days-until-expiry across reachable addresses
+	PinMismatch bool // -pin was set and at least one reachable address did not match
 }
 
 // tallyIPs aggregates per-address results. Skipped addresses count as neither
@@ -703,12 +765,30 @@ func PrintAllIPs(domain string, results []IPResult, opts PrintOptions) AllIPsRes
 		printAllIPsText(domain, results, opts)
 	}
 	return AllIPsResult{
-		AllMatch:  distinct <= 1,
-		HadError:  hadError,
-		Reachable: reachable,
-		Skipped:   skipped,
-		MinDays:   minDays,
+		AllMatch:    distinct <= 1,
+		HadError:    hadError,
+		Reachable:   reachable,
+		Skipped:     skipped,
+		MinDays:     minDays,
+		PinMismatch: anyPinMismatch(results, opts.Pin),
 	}
+}
+
+// anyPinMismatch reports whether -pin was set and at least one reachable address
+// served a certificate that does not match the pin.
+func anyPinMismatch(results []IPResult, pin string) bool {
+	if pin == "" {
+		return false
+	}
+	for _, r := range results {
+		if r.Skipped || r.Err != nil {
+			continue
+		}
+		if !MatchesPin(r.Info.Cert, pin) {
+			return true
+		}
+	}
+	return false
 }
 
 // printAllIPsText renders the addresses as a compact table with a final verdict.
@@ -730,9 +810,17 @@ func printAllIPsText(domain string, results []IPResult, opts PrintOptions) {
 					chain = maybeColor("INVALID", colorRed, opts.Color)
 				}
 			}
-			fmt.Printf("  %-39s  %s  %s days  expires %s  %s\n",
+			pin := ""
+			if opts.Pin != "" {
+				if MatchesPin(c, opts.Pin) {
+					pin = "  " + maybeColor("PIN-OK", colorGreen, opts.Color)
+				} else {
+					pin = "  " + maybeColor("PIN-MISMATCH", colorRed, opts.Color)
+				}
+			}
+			fmt.Printf("  %-39s  %s  %s days  expires %s  %s%s\n",
 				r.IP, Fingerprint(c)[:16], colorizeDays(DaysUntilExpiry(c), opts.Threshold, opts.Color),
-				c.NotAfter.Format("2006-01-02"), chain)
+				c.NotAfter.Format("2006-01-02"), chain, pin)
 		}
 	}
 
@@ -766,7 +854,7 @@ func printAllIPsJSON(domain string, results []IPResult, opts PrintOptions) {
 				Error string `json:"error"`
 			}{IP: r.IP, Error: r.Err.Error()})
 		default:
-			p := buildPayload(r.Info, "", opts.Chain)
+			p := buildPayload(r.Info, "", opts.Chain, opts.Fingerprint, opts.Pin)
 			p.IP = r.IP
 			p.UsedIP = "" // redundant in -all-ips: identical to ip
 			p.Fingerprint = Fingerprint(r.Info.Cert)
@@ -789,8 +877,8 @@ func printAllIPsJSON(domain string, results []IPResult, opts PrintOptions) {
 }
 
 // printJSON renders a single certificate as indented JSON.
-func (p *CertificatePrinterImpl) printJSON(info *CertInfo, includeChain bool) {
-	b, err := json.MarshalIndent(buildPayload(info, "", includeChain), "", "  ")
+func (p *CertificatePrinterImpl) printJSON(info *CertInfo, opts PrintOptions) {
+	b, err := json.MarshalIndent(buildPayload(info, "", opts.Chain, opts.Fingerprint, opts.Pin), "", "  ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to encode JSON: %v\n", err)
 		return

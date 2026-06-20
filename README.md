@@ -19,6 +19,7 @@ A small command-line tool to inspect and monitor SSL/TLS certificates — for on
 - Public key type/size and the negotiated TLS version & cipher
 - Certificates behind **STARTTLS** (SMTP/IMAP/POP3/FTP)
 - The cert on **every IP** of a domain (`-all-ips`) — catch a load balancer serving a stale/different cert
+- **Pinning** (`-pin sha256:…`) — verify the served cert/public-key fingerprint, exit `3` on mismatch (catches MITM, a swapped CA, or an unexpected rotation)
 
 ## Quick start
 
@@ -130,12 +131,14 @@ make build
 - `-output <text|json>` — output format (default `text`).
 - `-short` — print only the number of days remaining.
 - `-chain` — print every certificate in the chain (subject, issuer, expiry).
+- `-fingerprint` — print the certificate and public-key (SPKI) SHA-256 fingerprints.
 - `-all-ips` — resolve every address of the domain and check the certificate on each, then report whether they match (single domain only).
 - `-4` / `-6` — with `-all-ips`, restrict the check to IPv4 or IPv6 addresses (optional; addresses unreachable from the host are skipped automatically anyway).
 
 **Monitoring**
 
 - `-threshold <days>` — exit with code `2` when days remaining is below this value; `0` disables.
+- `-pin sha256:<hex>` — verify the served certificate against a pinned fingerprint; the hex may be the certificate **or** the public-key (SPKI) SHA-256, and the check passes if it matches either. Exits with code `3` on a mismatch. Single target only (one domain, a file, or `-all-ips`).
 
 In text mode, when writing to an interactive terminal, the days-remaining value and chain status are colorized (red/yellow/green). Color is disabled automatically when output is piped/redirected or when `NO_COLOR` is set.
 
@@ -184,6 +187,12 @@ ssl-watch -domain smtp.example.com -starttls smtp
 
 # Print every certificate in the chain
 ssl-watch -domain example.com -chain
+
+# Show the certificate and public-key (SPKI) SHA-256 fingerprints
+ssl-watch -domain example.com -fingerprint
+
+# Pin the certificate (or its public key); exit code 3 on mismatch
+ssl-watch -domain example.com -pin sha256:e4134cbc...
 
 # Check the certificate on every resolved IP (load balancers)
 ssl-watch -domain example.com -all-ips
@@ -254,6 +263,8 @@ Field notes:
 - `chain_valid` / `chain_error` — omitted for file-loaded certificates and with `-insecure`.
 - `tls_version` / `cipher_suite` — present only for fetched certificates.
 - `chain` — the full chain array (`{subject, issuer, not_after, days_remaining}`), present only with `-chain`.
+- `fingerprint` / `spki_fingerprint` — the certificate and public-key SHA-256, present only with `-fingerprint` (`fingerprint` is also always present per address under `-all-ips`).
+- `pin_match` — present only with `-pin`; `true`/`false` for the pin verdict.
 - `chain_expiry_warning` — `{subject, days_remaining}`, only when an intermediate expires before the leaf.
 - Problem flags appear (as `true`) **only when the problem exists**: `not_yet_valid`, `name_mismatch`, `not_server_auth`, `weak_signature`, `weak_key`.
 - When several domains are checked the output is an array; each element carries an extra `domain` field, and failures appear as `{"domain": "...", "error": "..."}`.
@@ -280,6 +291,7 @@ In JSON mode the result is `{ "domain", "certificates_match", "addresses": [...]
 <summary><strong>Exit codes</strong></summary>
 
 - `0` — success (and, with `-threshold`, days remaining is at or above the threshold for every certificate in the chain).
+- `3` — `-pin` was set and the served certificate did not match the pinned fingerprint. Takes precedence over `2`.
 - `2` — a certificate in the chain (leaf or intermediate) expires within `-threshold` days.
 - `1` — an error occurred (connection failure, parse error, invalid arguments).
 

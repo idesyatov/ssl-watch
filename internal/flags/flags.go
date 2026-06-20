@@ -26,6 +26,8 @@ type Config struct {
 	Threshold   int    // Expiry warning threshold in days (0 = disabled); drives exit code 2
 	Output      string // Output format: "text" or "json"
 	Chain       bool   // Print every certificate in the chain
+	Fingerprint bool   // Print the certificate and public-key SHA-256 fingerprints
+	Pin         string // Verify against a pinned fingerprint (sha256:<hex>); exit 3 on mismatch
 	AllIPs      bool   // Check the certificate on every resolved IP of the domain
 	IPv4Only    bool   // Restrict -all-ips to IPv4 addresses
 	IPv6Only    bool   // Restrict -all-ips to IPv6 addresses
@@ -62,6 +64,8 @@ type DefaultFlagParser struct {
 	threshold   *int
 	output      *string
 	chain       *bool
+	fingerprint *bool
+	pin         *string
 	allIPs      *bool
 	ipv4Only    *bool
 	ipv6Only    *bool
@@ -85,6 +89,8 @@ func (d *DefaultFlagParser) Parse() Config {
 		Threshold:   *d.threshold,
 		Output:      *d.output,
 		Chain:       *d.chain,
+		Fingerprint: *d.fingerprint,
+		Pin:         *d.pin,
 		AllIPs:      *d.allIPs,
 		IPv4Only:    *d.ipv4Only,
 		IPv6Only:    *d.ipv6Only,
@@ -120,6 +126,8 @@ func NewDefaultFlagParser() FlagParser {
 		threshold:   fs.Int("threshold", 0, "Warn (exit code 2) when days remaining is below this value (0 disables)"),
 		output:      fs.String("output", "text", "Output format: text or json"),
 		chain:       fs.Bool("chain", false, "Print every certificate in the chain"),
+		fingerprint: fs.Bool("fingerprint", false, "Print the certificate and public-key SHA-256 fingerprints"),
+		pin:         fs.String("pin", "", "Verify against a pinned fingerprint (sha256:<hex>, cert or public key); exit 3 on mismatch"),
 		allIPs:      fs.Bool("all-ips", false, "Check the certificate on every resolved IP of the domain (single domain only)"),
 		ipv4Only:    fs.Bool("4", false, "With -all-ips, check IPv4 addresses only"),
 		ipv6Only:    fs.Bool("6", false, "With -all-ips, check IPv6 addresses only"),
@@ -155,6 +163,7 @@ func NewDefaultFlagParser() FlagParser {
 		fmt.Fprintf(out, "  %s -domain smtp.example.com -starttls smtp\n", appName)
 		fmt.Fprintf(out, "  %s -domain example.com -chain\n", appName)
 		fmt.Fprintf(out, "  %s -domain example.com -all-ips\n", appName)
+		fmt.Fprintf(out, "  %s -domain example.com -pin sha256:<hex>\n", appName)
 		fmt.Fprintf(out, "  %s -certfile /path/to/cert.crt\n\n", appName)
 		fmt.Fprintf(out, "GitHub: %s\n\n", GitURL)
 
@@ -172,11 +181,13 @@ func NewDefaultFlagParser() FlagParser {
 		flagLine("output")
 		flagLine("short")
 		flagLine("chain")
+		flagLine("fingerprint")
 		flagLine("all-ips")
 		flagLine("4")
 		flagLine("6")
 		fmt.Fprintf(out, "\nMonitoring:\n")
 		flagLine("threshold")
+		flagLine("pin")
 		fmt.Fprintf(out, "\nMisc:\n")
 		flagLine("version")
 	}
