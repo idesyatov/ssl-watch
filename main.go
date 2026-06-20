@@ -78,8 +78,8 @@ func main() {
 	}
 
 	// Validate the requested output format
-	if cfg.Output != "text" && cfg.Output != "json" {
-		fmt.Fprintf(os.Stderr, "Error: invalid -output %q (expected \"text\" or \"json\")\n\n", cfg.Output)
+	if cfg.Output != "text" && cfg.Output != "json" && cfg.Output != "prometheus" {
+		fmt.Fprintf(os.Stderr, "Error: invalid -output %q (expected \"text\", \"json\" or \"prometheus\")\n\n", cfg.Output)
 		parser.Usage()
 		os.Exit(1)
 	}
@@ -158,8 +158,8 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: -pem and -export cannot be combined\n\n")
 			parser.Usage()
 			os.Exit(1)
-		case cfg.Output == "json":
-			fmt.Fprintf(os.Stderr, "Error: -pem/-export cannot be combined with -output json\n\n")
+		case cfg.Output != "text":
+			fmt.Fprintf(os.Stderr, "Error: -pem/-export cannot be combined with -output %s\n\n", cfg.Output)
 			parser.Usage()
 			os.Exit(1)
 		case cfg.AllIPs:
@@ -176,6 +176,21 @@ func main() {
 			os.Exit(1)
 		case cfg.Threshold > 0:
 			fmt.Fprintf(os.Stderr, "Error: -pem/-export cannot be combined with -threshold\n\n")
+			parser.Usage()
+			os.Exit(1)
+		}
+	}
+
+	// Prometheus output exposes one metric set per fetched domain, so it is for
+	// remote domains only (no local file, no per-address -all-ips in this version).
+	if cfg.Output == "prometheus" {
+		switch {
+		case cfg.AllIPs:
+			fmt.Fprintf(os.Stderr, "Error: -output prometheus cannot be combined with -all-ips\n\n")
+			parser.Usage()
+			os.Exit(1)
+		case cfg.CertFile != "":
+			fmt.Fprintf(os.Stderr, "Error: -output prometheus cannot be combined with -certfile\n\n")
 			parser.Usage()
 			os.Exit(1)
 		}
@@ -210,6 +225,11 @@ func main() {
 		Pin:         pinHex,
 	}
 	timeout := time.Duration(cfg.Timeout) * time.Second
+
+	// Prometheus exposition: fetch every domain and emit one metric set each.
+	if cfg.Output == "prometheus" {
+		os.Exit(runPrometheus(fetcher, domains, cfg, timeout, pinHex))
+	}
 
 	// -all-ips: resolve the domain and check the certificate on every address.
 	if cfg.AllIPs {
@@ -261,6 +281,36 @@ func runExport(info *cert.CertInfo, cfg flags.Config) int {
 	if _, err := os.Stdout.Write(pemBytes); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to write PEM: %v\n", err)
 		return 1
+	}
+	return 0
+}
+
+// runPrometheus fetches every domain and writes the results in Prometheus
+// exposition format to stdout. It returns the aggregated exit code: 1 if any
+// domain failed to be retrieved, otherwise 2 if any certificate expires within
+// -threshold, otherwise 0.
+func runPrometheus(fetcher cert.CertificateFetcher, domains []string, cfg flags.Config, timeout time.Duration, pinHex string) int {
+	samples := make([]cert.PromSample, 0, len(domains))
+	hadError := false
+	expiring := false
+	for _, d := range domains {
+		info, err := fetcher.Fetch(d, cfg.Port, cfg.IPAddr, cfg.Insecure, timeout, cfg.StartTLS)
+		if err != nil {
+			hadError = true
+			samples = append(samples, cert.PromSample{Domain: d, Err: err})
+			continue
+		}
+		samples = append(samples, cert.PromSample{Domain: d, Info: info})
+		if cfg.Threshold > 0 && info.MinDaysUntilExpiry() < cfg.Threshold {
+			expiring = true
+		}
+	}
+	cert.WritePrometheus(os.Stdout, samples, pinHex)
+	switch {
+	case hadError:
+		return 1
+	case expiring:
+		return 2
 	}
 	return 0
 }

@@ -129,7 +129,7 @@ make build
 
 **Output**
 
-- `-output <text|json>` — output format (default `text`).
+- `-output <text|json|prometheus>` — output format (default `text`). `prometheus` emits metrics in the exposition format for a single domain or a batch (not with `-all-ips`/`-certfile`).
 - `-short` — print only the number of days remaining.
 - `-chain` — print every certificate in the chain (subject, issuer, expiry).
 - `-fingerprint` — print the certificate and public-key (SPKI) SHA-256 fingerprints.
@@ -293,6 +293,25 @@ WARNING: certificates differ across addresses
 Addresses that are unreachable from the host (e.g. IPv6 on an IPv4-only machine) are reported as `skipped` and do not count as failures, so `-all-ips` stays clean on single-stack hosts without any flag. Use `-4` / `-6` to restrict the check to one family explicitly.
 
 In JSON mode the result is `{ "domain", "certificates_match", "addresses": [...] }`, where each address is the usual certificate object plus `ip` and `fingerprint` (a skipped address is `{ "ip", "skipped": true, "error" }`, and a real failure `{ "ip", "error" }`). Exit code: `1` if nothing was reachable or an address failed for a real reason, otherwise `2` if the certificates differ or any expires within `-threshold`, otherwise `0`.
+
+### Prometheus output (`-output prometheus`)
+
+Emits metrics in the Prometheus exposition format — one set per domain (single or batch) — for scraping via the node_exporter [textfile collector](https://github.com/prometheus/node_exporter#textfile-collector) or alerting:
+
+```text
+# HELP ssl_cert_expiry_days Days until the leaf certificate expires.
+# TYPE ssl_cert_expiry_days gauge
+ssl_cert_expiry_days{domain="example.com"} 80
+ssl_cert_min_expiry_days{domain="example.com"} 80
+ssl_cert_not_after_timestamp{domain="example.com"} 1757432803
+ssl_cert_chain_valid{domain="example.com"} 1
+```
+
+`ssl_cert_up{domain}` is `0` for a domain that could not be retrieved (and no other samples are emitted for it), so you can alert on scrape failures separately from expiry. `ssl_cert_pin_match` is added when `-pin` is set. Typical cron usage writes to the collector directory:
+
+```bash
+ssl-watch -domain a.com,b.com -output prometheus > /var/lib/node_exporter/ssl_watch.prom
+```
 
 </details>
 

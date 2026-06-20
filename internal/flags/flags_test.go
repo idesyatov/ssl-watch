@@ -140,7 +140,7 @@ func TestUsage(t *testing.T) {
 	parser.Usage()
 
 	out := buf.String()
-	for _, want := range []string{GitURL, "Usage:", "Target:", "Connection:", "Output:", "Monitoring:", "-domain", "-domain-file", "-threshold", "-timeout", "-starttls", "-chain", "-fingerprint", "-pin", "-pem", "-export", "-all-ips", "-4", "-6"} {
+	for _, want := range []string{GitURL, "Usage:", "Target:", "Connection:", "Output:", "Monitoring:", "-domain", "-domain-file", "-threshold", "-timeout", "-starttls", "-chain", "-fingerprint", "-pin", "-pem", "-export", "-all-ips", "-4", "-6", "prometheus"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected usage output to contain %q, got:\n%s", want, out)
 		}

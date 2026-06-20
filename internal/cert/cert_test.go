@@ -583,6 +583,48 @@ func TestPrint_HealthyNoTrustNoise(t *testing.T) {
 	}
 }
 
+// TestWritePrometheus verifies the exposition output: TYPE headers, up=1/0,
+// per-domain samples, chain_valid only when verified, and pin_match only with a pin.
+func TestWritePrometheus(t *testing.T) {
+	ok := genCert(t, "ok.example", time.Now().Add(90*24*time.Hour))
+	samples := []PromSample{
+		{Domain: "ok.example", Info: &CertInfo{Cert: ok, Chain: []*x509.Certificate{ok}, Verified: true}},
+		{Domain: "bad.example", Err: errors.New("connection refused")},
+	}
+
+	var buf strings.Builder
+	WritePrometheus(&buf, samples, "")
+	out := buf.String()
+
+	for _, want := range []string{
+		"# TYPE ssl_cert_up gauge",
+		`ssl_cert_up{domain="ok.example"} 1`,
+		`ssl_cert_up{domain="bad.example"} 0`,
+		`ssl_cert_expiry_days{domain="ok.example"}`,
+		`ssl_cert_not_after_timestamp{domain="ok.example"}`,
+		`ssl_cert_chain_valid{domain="ok.example"} 1`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("prometheus output missing %q:\n%s", want, out)
+		}
+	}
+	// A failed domain has only ssl_cert_up, no expiry sample.
+	if strings.Contains(out, `ssl_cert_expiry_days{domain="bad.example"}`) {
+		t.Errorf("failed domain should not have an expiry sample:\n%s", out)
+	}
+	// No pin → no pin_match family.
+	if strings.Contains(out, "ssl_cert_pin_match") {
+		t.Errorf("pin_match should be absent without a pin:\n%s", out)
+	}
+
+	// With a matching pin, the pin_match family appears as 1.
+	buf.Reset()
+	WritePrometheus(&buf, samples[:1], Fingerprint(ok))
+	if pinOut := buf.String(); !strings.Contains(pinOut, `ssl_cert_pin_match{domain="ok.example"} 1`) {
+		t.Errorf("expected pin_match 1 with a matching pin:\n%s", pinOut)
+	}
+}
+
 // TestPrint_Fingerprint verifies the two fingerprint lines appear only with the flag.
 func TestPrint_Fingerprint(t *testing.T) {
 	c := genCert(t, "fp.example", time.Now().Add(90*24*time.Hour))

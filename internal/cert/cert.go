@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"os"
@@ -859,6 +860,90 @@ func ErrorPayload(domain, errMsg string) any {
 		Domain string `json:"domain"`
 		Error  string `json:"error"`
 	}{Domain: domain, Error: errMsg}
+}
+
+// PromSample is the result for one domain in a Prometheus run: Info is nil when
+// the certificate could not be retrieved (Err is set).
+type PromSample struct {
+	Domain string
+	Info   *CertInfo
+	Err    error
+}
+
+// promEscape escapes a Prometheus label value (backslash, quote, newline).
+func promEscape(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	s = strings.ReplaceAll(s, "\n", `\n`)
+	return s
+}
+
+// WritePrometheus renders the samples in Prometheus text exposition format,
+// grouped by metric family. The pin_match family is emitted only when a pin is
+// configured. A domain that failed to be retrieved gets ssl_cert_up 0 and no
+// other samples.
+func WritePrometheus(w io.Writer, samples []PromSample, pin string) {
+	label := func(d string) string { return fmt.Sprintf(`{domain="%s"}`, promEscape(d)) }
+
+	fmt.Fprintln(w, "# HELP ssl_cert_up Whether the certificate was retrieved (1) or not (0).")
+	fmt.Fprintln(w, "# TYPE ssl_cert_up gauge")
+	for _, s := range samples {
+		up := 0
+		if s.Info != nil {
+			up = 1
+		}
+		fmt.Fprintf(w, "ssl_cert_up%s %d\n", label(s.Domain), up)
+	}
+
+	fmt.Fprintln(w, "# HELP ssl_cert_expiry_days Days until the leaf certificate expires.")
+	fmt.Fprintln(w, "# TYPE ssl_cert_expiry_days gauge")
+	for _, s := range samples {
+		if s.Info != nil {
+			fmt.Fprintf(w, "ssl_cert_expiry_days%s %d\n", label(s.Domain), DaysUntilExpiry(s.Info.Cert))
+		}
+	}
+
+	fmt.Fprintln(w, "# HELP ssl_cert_min_expiry_days Days until the soonest-expiring certificate in the chain.")
+	fmt.Fprintln(w, "# TYPE ssl_cert_min_expiry_days gauge")
+	for _, s := range samples {
+		if s.Info != nil {
+			fmt.Fprintf(w, "ssl_cert_min_expiry_days%s %d\n", label(s.Domain), s.Info.MinDaysUntilExpiry())
+		}
+	}
+
+	fmt.Fprintln(w, "# HELP ssl_cert_not_after_timestamp Leaf certificate expiry as a Unix timestamp.")
+	fmt.Fprintln(w, "# TYPE ssl_cert_not_after_timestamp gauge")
+	for _, s := range samples {
+		if s.Info != nil {
+			fmt.Fprintf(w, "ssl_cert_not_after_timestamp%s %d\n", label(s.Domain), s.Info.Cert.NotAfter.Unix())
+		}
+	}
+
+	fmt.Fprintln(w, "# HELP ssl_cert_chain_valid Whether the certificate chain verified (1) or not (0).")
+	fmt.Fprintln(w, "# TYPE ssl_cert_chain_valid gauge")
+	for _, s := range samples {
+		if s.Info != nil && s.Info.Verified {
+			v := 0
+			if s.Info.ChainErr == nil {
+				v = 1
+			}
+			fmt.Fprintf(w, "ssl_cert_chain_valid%s %d\n", label(s.Domain), v)
+		}
+	}
+
+	if pin != "" {
+		fmt.Fprintln(w, "# HELP ssl_cert_pin_match Whether the served certificate matches the pinned fingerprint.")
+		fmt.Fprintln(w, "# TYPE ssl_cert_pin_match gauge")
+		for _, s := range samples {
+			if s.Info != nil {
+				v := 0
+				if MatchesPin(s.Info.Cert, pin) {
+					v = 1
+				}
+				fmt.Fprintf(w, "ssl_cert_pin_match%s %d\n", label(s.Domain), v)
+			}
+		}
+	}
 }
 
 // IPResult is the certificate (or error) obtained from one resolved address.
