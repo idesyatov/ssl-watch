@@ -23,6 +23,8 @@ type Config struct {
 	IPAddr       string // IP address to connect to (optional)
 	ServerName   string // SNI / hostname to verify against (overrides the domain)
 	CAFile       string // PEM bundle of trust anchors to verify against (replaces system roots)
+	ClientCert   string // Client certificate (PEM) for mutual TLS
+	ClientKey    string // Private key (PEM) for the client certificate
 	Short        bool   // Output only the number of days remaining until expiration
 	Insecure     bool   // Skip certificate chain verification
 	Threshold    int    // Expiry warning threshold in days (0 = disabled); drives exit code 2
@@ -67,6 +69,8 @@ type DefaultFlagParser struct {
 	ipaddr       *string
 	serverName   *string
 	caFile       *string
+	clientCert   *string
+	clientKey    *string
 	short        *bool
 	insecure     *bool
 	threshold    *int
@@ -98,6 +102,8 @@ func (d *DefaultFlagParser) Parse() Config {
 		IPAddr:       *d.ipaddr,
 		ServerName:   *d.serverName,
 		CAFile:       *d.caFile,
+		ClientCert:   *d.clientCert,
+		ClientKey:    *d.clientKey,
 		Short:        *d.short,
 		Insecure:     *d.insecure,
 		Threshold:    *d.threshold,
@@ -141,6 +147,8 @@ func NewDefaultFlagParser() FlagParser {
 		ipaddr:       fs.String("ipaddr", "", "IP address to connect to (optional)"),
 		serverName:   fs.String("servername", "", "SNI/hostname to verify against, overriding the domain (e.g. with -ipaddr)"),
 		caFile:       fs.String("cafile", "", "PEM bundle of trusted roots to verify against, replacing the system roots"),
+		clientCert:   fs.String("client-cert", "", "Client certificate (PEM) for mutual TLS (requires -client-key)"),
+		clientKey:    fs.String("client-key", "", "Private key (PEM) for the client certificate (requires -client-cert)"),
 		short:        fs.Bool("short", false, "Output only the number of days remaining until certificate expiration"),
 		insecure:     fs.Bool("insecure", false, "Skip certificate chain verification"),
 		threshold:    fs.Int("threshold", 0, "Warn (exit code 2) when days remaining is below this value (0 disables)"),
@@ -202,6 +210,8 @@ func NewDefaultFlagParser() FlagParser {
 		flagLine("starttls")
 		flagLine("timeout")
 		flagLine("cafile")
+		flagLine("client-cert")
+		flagLine("client-key")
 		flagLine("insecure")
 		fmt.Fprintf(out, "\nOutput:\n")
 		flagLine("output")

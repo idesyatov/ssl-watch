@@ -34,6 +34,9 @@ func (f *CertificateFetcherImpl) Fetch(domain, port, ipaddr string, opts FetchOp
 		InsecureSkipVerify: true,
 		ServerName:         name,
 	}
+	if opts.ClientCert != nil {
+		tlsConfig.Certificates = []tls.Certificate{*opts.ClientCert}
+	}
 
 	conn, err := dialTLS(address, opts.Timeout, opts.StartTLS, tlsConfig)
 	if err != nil {
@@ -246,6 +249,16 @@ func (l *CertificateLoaderImpl) Load(certFile string) (*CertInfo, error) {
 	}
 
 	return &CertInfo{Cert: cert, FromFile: true}, nil
+}
+
+// LoadClientCert loads a client certificate and its private key from PEM files,
+// for use as the client identity in mutual TLS.
+func LoadClientCert(certFile, keyFile string) (*tls.Certificate, error) {
+	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load client certificate: %v", err)
+	}
+	return &pair, nil
 }
 
 // LoadCAFile reads a PEM bundle and returns a certificate pool containing its

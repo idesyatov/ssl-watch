@@ -226,3 +226,38 @@ func TestNegotiateStartTLS_Unknown(t *testing.T) {
 		t.Error("expected error for unknown protocol, got nil")
 	}
 }
+
+// TestLoadClientCert verifies a matching cert/key pair loads and bad inputs error.
+func TestLoadClientCert(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+	tmpl := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "client"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "client.crt")
+	keyPath := filepath.Join(dir, "client.key")
+	if err := os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	pair, err := LoadClientCert(certPath, keyPath)
+	if err != nil || pair == nil {
+		t.Fatalf("expected a client certificate, got pair=%v err=%v", pair, err)
+	}
+	if _, err := LoadClientCert(certPath, filepath.Join(dir, "missing.key")); err == nil {
+		t.Error("expected an error for a missing key file")
+	}
+}

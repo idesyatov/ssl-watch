@@ -127,6 +127,7 @@ make build
 - `-starttls <proto>` — upgrade via STARTTLS before reading the certificate: `smtp`, `imap`, `pop3` or `ftp`.
 - `-timeout <seconds>` — connection timeout when fetching (default `10`).
 - `-cafile <path>` — verify the chain against the roots in this PEM bundle **instead of** the system roots (like `openssl verify -CAfile` / `curl --cacert`). Useful for an internal/corporate/national CA. Cannot be combined with `-insecure`.
+- `-client-cert <path>` / `-client-key <path>` — present a client certificate (PEM) and its key for mutual TLS. Both are required together.
 - `-insecure` — skip certificate chain verification (e.g. for self-signed certs).
 
 **Output**

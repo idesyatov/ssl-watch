@@ -135,6 +135,14 @@ func main() {
 		}
 		fetchOpts.Roots = roots
 	}
+	if cfg.ClientCert != "" {
+		clientCert, loadErr := cert.LoadClientCert(cfg.ClientCert, cfg.ClientKey)
+		if loadErr != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", loadErr)
+			os.Exit(exitError)
+		}
+		fetchOpts.ClientCert = clientCert
+	}
 
 	// Prometheus exposition: fetch every domain and emit one metric set each.
 	if cfg.Output == "prometheus" {
@@ -216,6 +224,12 @@ func validate(cfg flags.Config, domains []string) error {
 	}
 	if (cfg.CAFile != "" || cfg.ServerName != "") && cfg.CertFile != "" {
 		return errors.New("-cafile/-servername cannot be combined with -certfile")
+	}
+	if (cfg.ClientCert != "") != (cfg.ClientKey != "") {
+		return errors.New("-client-cert and -client-key must be used together")
+	}
+	if (cfg.ClientCert != "" || cfg.ClientKey != "") && cfg.CertFile != "" {
+		return errors.New("-client-cert/-client-key cannot be combined with -certfile")
 	}
 	if cfg.ServerName != "" && len(domains) > 1 {
 		return errors.New("-servername cannot be combined with multiple domains")

@@ -1,6 +1,7 @@
 package cert
 
 import (
+	"crypto/tls"
 	"crypto/x509"
 	"time"
 )
@@ -22,11 +23,12 @@ type CertInfo struct {
 // FetchOptions controls how Fetch connects and verifies. The zero value dials
 // direct TLS, verifies against the system roots, and uses the domain as the SNI.
 type FetchOptions struct {
-	Insecure   bool           // Skip chain verification (still retrieves the cert)
-	Timeout    time.Duration  // Bounds the connection (and STARTTLS negotiation)
-	StartTLS   string         // smtp/imap/pop3/ftp to upgrade via STARTTLS; empty = direct TLS
-	ServerName string         // SNI and hostname to verify against; empty = use domain
-	Roots      *x509.CertPool // Trust anchors for verification; nil = system roots
+	Insecure   bool             // Skip chain verification (still retrieves the cert)
+	Timeout    time.Duration    // Bounds the connection (and STARTTLS negotiation)
+	StartTLS   string           // smtp/imap/pop3/ftp to upgrade via STARTTLS; empty = direct TLS
+	ServerName string           // SNI and hostname to verify against; empty = use domain
+	Roots      *x509.CertPool   // Trust anchors for verification; nil = system roots
+	ClientCert *tls.Certificate // Client certificate for mutual TLS; nil = none
 }
 
 // CertificateFetcher defines an interface for fetching certificates from a domain or IP address.
