@@ -113,6 +113,10 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: -all-ips cannot be combined with -short\n\n")
 			parser.Usage()
 			os.Exit(1)
+		case cfg.ExpectIssuer != "" || cfg.Strict:
+			fmt.Fprintf(os.Stderr, "Error: -all-ips cannot be combined with -expect-issuer/-strict\n\n")
+			parser.Usage()
+			os.Exit(1)
 		case len(domains) != 1:
 			fmt.Fprintf(os.Stderr, "Error: -all-ips requires exactly one domain\n\n")
 			parser.Usage()
@@ -178,6 +182,10 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: -pem/-export cannot be combined with -threshold\n\n")
 			parser.Usage()
 			os.Exit(1)
+		case cfg.ExpectIssuer != "" || cfg.Strict:
+			fmt.Fprintf(os.Stderr, "Error: -pem/-export cannot be combined with -expect-issuer/-strict\n\n")
+			parser.Usage()
+			os.Exit(1)
 		}
 	}
 
@@ -216,13 +224,14 @@ func main() {
 	var printer cert.CertificatePrinter = &cert.CertificatePrinterImpl{}
 
 	opts := cert.PrintOptions{
-		Short:       cfg.Short,
-		JSON:        cfg.Output == "json",
-		Threshold:   cfg.Threshold,
-		Color:       useColor(cfg),
-		Chain:       cfg.Chain,
-		Fingerprint: cfg.Fingerprint,
-		Pin:         pinHex,
+		Short:        cfg.Short,
+		JSON:         cfg.Output == "json",
+		Threshold:    cfg.Threshold,
+		Color:        useColor(cfg),
+		Chain:        cfg.Chain,
+		Fingerprint:  cfg.Fingerprint,
+		Pin:          pinHex,
+		ExpectIssuer: cfg.ExpectIssuer,
 	}
 	timeout := time.Duration(cfg.Timeout) * time.Second
 
@@ -319,14 +328,20 @@ func runPrometheus(fetcher cert.CertificateFetcher, domains []string, cfg flags.
 // within the configured threshold.
 func printSingle(printer cert.CertificatePrinter, info *cert.CertInfo, cfg flags.Config, opts cert.PrintOptions) {
 	printer.Print(info, opts)
-	// Exit code 3 when a pinned fingerprint does not match — a wrong/forged cert
-	// is more urgent than an upcoming expiry, so it takes precedence.
+	// Exit code 3 when an explicit expectation about the served certificate fails
+	// (a pinned fingerprint or the issuer) — a wrong cert is more urgent than an
+	// upcoming expiry, so it takes precedence.
 	if opts.Pin != "" && !cert.MatchesPin(info.Cert, opts.Pin) {
 		os.Exit(3)
 	}
-	// Exit code 2 when any certificate in the chain (leaf or an intermediate)
-	// expires within the configured threshold, so the tool can drive alerts in
-	// cron/CI off the weakest link.
+	if cfg.ExpectIssuer != "" && !cert.IssuerMatches(info.Cert, cfg.ExpectIssuer) {
+		os.Exit(3)
+	}
+	// Exit code 2 for soft problems: with -strict any warning fails, and any
+	// certificate in the chain expiring within -threshold fails.
+	if cfg.Strict && cert.HasWarnings(info) {
+		os.Exit(2)
+	}
 	if cfg.Threshold > 0 && info.MinDaysUntilExpiry() < cfg.Threshold {
 		os.Exit(2)
 	}
@@ -341,6 +356,8 @@ func printSingle(printer cert.CertificatePrinter, info *cert.CertInfo, cfg flags
 func runBatch(fetcher cert.CertificateFetcher, printer cert.CertificatePrinter, domains []string, cfg flags.Config, opts cert.PrintOptions, timeout time.Duration) int {
 	hadError := false
 	expiring := false
+	issuerFail := false
+	strictFail := false
 	printedText := false
 	var entries []any
 
@@ -372,6 +389,12 @@ func runBatch(fetcher cert.CertificateFetcher, printer cert.CertificatePrinter, 
 		if cfg.Threshold > 0 && info.MinDaysUntilExpiry() < cfg.Threshold {
 			expiring = true
 		}
+		if cfg.ExpectIssuer != "" && !cert.IssuerMatches(info.Cert, cfg.ExpectIssuer) {
+			issuerFail = true
+		}
+		if cfg.Strict && cert.HasWarnings(info) {
+			strictFail = true
+		}
 	}
 
 	if opts.JSON {
@@ -386,7 +409,9 @@ func runBatch(fetcher cert.CertificateFetcher, printer cert.CertificatePrinter, 
 	switch {
 	case hadError:
 		return 1
-	case expiring:
+	case issuerFail:
+		return 3
+	case expiring || strictFail:
 		return 2
 	}
 	return 0

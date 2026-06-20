@@ -16,26 +16,28 @@ const (
 
 // Config holds the parsed command-line options.
 type Config struct {
-	Domain      string // Domain(s) to check, comma-separated for several
-	DomainFile  string // Path to a file with one domain per line ("-" reads stdin)
-	CertFile    string // Path to the local certificate file
-	Port        string // Port to connect to
-	IPAddr      string // IP address to connect to (optional)
-	Short       bool   // Output only the number of days remaining until expiration
-	Insecure    bool   // Skip certificate chain verification
-	Threshold   int    // Expiry warning threshold in days (0 = disabled); drives exit code 2
-	Output      string // Output format: "text" or "json"
-	Chain       bool   // Print every certificate in the chain
-	Fingerprint bool   // Print the certificate and public-key SHA-256 fingerprints
-	Pin         string // Verify against a pinned fingerprint (sha256:<hex>); exit 3 on mismatch
-	Pem         bool   // Print the certificate chain as PEM to stdout
-	Export      string // Write the certificate chain as PEM to the given file
-	AllIPs      bool   // Check the certificate on every resolved IP of the domain
-	IPv4Only    bool   // Restrict -all-ips to IPv4 addresses
-	IPv6Only    bool   // Restrict -all-ips to IPv6 addresses
-	Timeout     int    // Connection timeout in seconds for fetching a remote certificate
-	StartTLS    string // STARTTLS protocol to upgrade the connection: smtp/imap/pop3/ftp (empty = direct TLS)
-	ShowVersion bool   // Show version and exit
+	Domain       string // Domain(s) to check, comma-separated for several
+	DomainFile   string // Path to a file with one domain per line ("-" reads stdin)
+	CertFile     string // Path to the local certificate file
+	Port         string // Port to connect to
+	IPAddr       string // IP address to connect to (optional)
+	Short        bool   // Output only the number of days remaining until expiration
+	Insecure     bool   // Skip certificate chain verification
+	Threshold    int    // Expiry warning threshold in days (0 = disabled); drives exit code 2
+	ExpectIssuer string // Assert the issuer contains this substring; exit 3 on mismatch
+	Strict       bool   // Treat warnings as failures (exit 2)
+	Output       string // Output format: "text" or "json"
+	Chain        bool   // Print every certificate in the chain
+	Fingerprint  bool   // Print the certificate and public-key SHA-256 fingerprints
+	Pin          string // Verify against a pinned fingerprint (sha256:<hex>); exit 3 on mismatch
+	Pem          bool   // Print the certificate chain as PEM to stdout
+	Export       string // Write the certificate chain as PEM to the given file
+	AllIPs       bool   // Check the certificate on every resolved IP of the domain
+	IPv4Only     bool   // Restrict -all-ips to IPv4 addresses
+	IPv6Only     bool   // Restrict -all-ips to IPv6 addresses
+	Timeout      int    // Connection timeout in seconds for fetching a remote certificate
+	StartTLS     string // STARTTLS protocol to upgrade the connection: smtp/imap/pop3/ftp (empty = direct TLS)
+	ShowVersion  bool   // Show version and exit
 }
 
 // FlagParser defines an interface for parsing command-line flags.
@@ -55,27 +57,29 @@ type FlagParser interface {
 // It owns its own flag set to avoid relying on global state, which makes it
 // safe to construct and parse repeatedly (e.g. in tests).
 type DefaultFlagParser struct {
-	fs          *flag.FlagSet
-	domain      *string
-	domainFile  *string
-	certFile    *string
-	port        *string
-	ipaddr      *string
-	short       *bool
-	insecure    *bool
-	threshold   *int
-	output      *string
-	chain       *bool
-	fingerprint *bool
-	pin         *string
-	pem         *bool
-	export      *string
-	allIPs      *bool
-	ipv4Only    *bool
-	ipv6Only    *bool
-	timeout     *int
-	starttls    *string
-	showVersion *bool
+	fs           *flag.FlagSet
+	domain       *string
+	domainFile   *string
+	certFile     *string
+	port         *string
+	ipaddr       *string
+	short        *bool
+	insecure     *bool
+	threshold    *int
+	output       *string
+	chain        *bool
+	fingerprint  *bool
+	pin          *string
+	expectIssuer *string
+	strict       *bool
+	pem          *bool
+	export       *string
+	allIPs       *bool
+	ipv4Only     *bool
+	ipv6Only     *bool
+	timeout      *int
+	starttls     *string
+	showVersion  *bool
 }
 
 // Parse processes the command-line flags and returns the parsed configuration.
@@ -83,26 +87,28 @@ func (d *DefaultFlagParser) Parse() Config {
 	// flag.ExitOnError makes Parse exit on error rather than return one.
 	_ = d.fs.Parse(os.Args[1:])
 	return Config{
-		Domain:      *d.domain,
-		DomainFile:  *d.domainFile,
-		CertFile:    *d.certFile,
-		Port:        *d.port,
-		IPAddr:      *d.ipaddr,
-		Short:       *d.short,
-		Insecure:    *d.insecure,
-		Threshold:   *d.threshold,
-		Output:      *d.output,
-		Chain:       *d.chain,
-		Fingerprint: *d.fingerprint,
-		Pin:         *d.pin,
-		Pem:         *d.pem,
-		Export:      *d.export,
-		AllIPs:      *d.allIPs,
-		IPv4Only:    *d.ipv4Only,
-		IPv6Only:    *d.ipv6Only,
-		Timeout:     *d.timeout,
-		StartTLS:    *d.starttls,
-		ShowVersion: *d.showVersion,
+		Domain:       *d.domain,
+		DomainFile:   *d.domainFile,
+		CertFile:     *d.certFile,
+		Port:         *d.port,
+		IPAddr:       *d.ipaddr,
+		Short:        *d.short,
+		Insecure:     *d.insecure,
+		Threshold:    *d.threshold,
+		Output:       *d.output,
+		Chain:        *d.chain,
+		ExpectIssuer: *d.expectIssuer,
+		Strict:       *d.strict,
+		Fingerprint:  *d.fingerprint,
+		Pin:          *d.pin,
+		Pem:          *d.pem,
+		Export:       *d.export,
+		AllIPs:       *d.allIPs,
+		IPv4Only:     *d.ipv4Only,
+		IPv6Only:     *d.ipv6Only,
+		Timeout:      *d.timeout,
+		StartTLS:     *d.starttls,
+		ShowVersion:  *d.showVersion,
 	}
 }
 
@@ -121,27 +127,29 @@ func (d *DefaultFlagParser) Usage() {
 func NewDefaultFlagParser() FlagParser {
 	fs := flag.NewFlagSet(appName, flag.ExitOnError)
 	p := &DefaultFlagParser{
-		fs:          fs,
-		domain:      fs.String("domain", "", "Domain(s) to check, comma-separated for several (e.g. a.com,b.com)"),
-		domainFile:  fs.String("domain-file", "", "Path to a file with one domain per line (\"-\" reads stdin)"),
-		certFile:    fs.String("certfile", "", "Path to the local certificate file"),
-		port:        fs.String("port", "443", "Port to connect to (optional)"),
-		ipaddr:      fs.String("ipaddr", "", "IP address to connect to (optional)"),
-		short:       fs.Bool("short", false, "Output only the number of days remaining until certificate expiration"),
-		insecure:    fs.Bool("insecure", false, "Skip certificate chain verification"),
-		threshold:   fs.Int("threshold", 0, "Warn (exit code 2) when days remaining is below this value (0 disables)"),
-		output:      fs.String("output", "text", "Output format: text, json or prometheus"),
-		chain:       fs.Bool("chain", false, "Print every certificate in the chain"),
-		fingerprint: fs.Bool("fingerprint", false, "Print the certificate and public-key SHA-256 fingerprints"),
-		pin:         fs.String("pin", "", "Verify against a pinned fingerprint (sha256:<hex>, cert or public key); exit 3 on mismatch"),
-		pem:         fs.Bool("pem", false, "Print the certificate chain as PEM to stdout"),
-		export:      fs.String("export", "", "Write the certificate chain as PEM to the given file"),
-		allIPs:      fs.Bool("all-ips", false, "Check the certificate on every resolved IP of the domain (single domain only)"),
-		ipv4Only:    fs.Bool("4", false, "With -all-ips, check IPv4 addresses only"),
-		ipv6Only:    fs.Bool("6", false, "With -all-ips, check IPv6 addresses only"),
-		timeout:     fs.Int("timeout", 10, "Connection timeout in seconds when fetching a remote certificate"),
-		starttls:    fs.String("starttls", "", "Upgrade the connection via STARTTLS: smtp, imap, pop3 or ftp (default: direct TLS)"),
-		showVersion: fs.Bool("version", false, "Show version"),
+		fs:           fs,
+		domain:       fs.String("domain", "", "Domain(s) to check, comma-separated for several (e.g. a.com,b.com)"),
+		domainFile:   fs.String("domain-file", "", "Path to a file with one domain per line (\"-\" reads stdin)"),
+		certFile:     fs.String("certfile", "", "Path to the local certificate file"),
+		port:         fs.String("port", "443", "Port to connect to (optional)"),
+		ipaddr:       fs.String("ipaddr", "", "IP address to connect to (optional)"),
+		short:        fs.Bool("short", false, "Output only the number of days remaining until certificate expiration"),
+		insecure:     fs.Bool("insecure", false, "Skip certificate chain verification"),
+		threshold:    fs.Int("threshold", 0, "Warn (exit code 2) when days remaining is below this value (0 disables)"),
+		output:       fs.String("output", "text", "Output format: text, json or prometheus"),
+		chain:        fs.Bool("chain", false, "Print every certificate in the chain"),
+		fingerprint:  fs.Bool("fingerprint", false, "Print the certificate and public-key SHA-256 fingerprints"),
+		pin:          fs.String("pin", "", "Verify against a pinned fingerprint (sha256:<hex>, cert or public key); exit 3 on mismatch"),
+		expectIssuer: fs.String("expect-issuer", "", "Assert the certificate issuer contains this substring (case-insensitive); exit 3 on mismatch"),
+		strict:       fs.Bool("strict", false, "Treat warnings (not-yet-valid, name mismatch, untrusted chain, …) as failures; exit 2"),
+		pem:          fs.Bool("pem", false, "Print the certificate chain as PEM to stdout"),
+		export:       fs.String("export", "", "Write the certificate chain as PEM to the given file"),
+		allIPs:       fs.Bool("all-ips", false, "Check the certificate on every resolved IP of the domain (single domain only)"),
+		ipv4Only:     fs.Bool("4", false, "With -all-ips, check IPv4 addresses only"),
+		ipv6Only:     fs.Bool("6", false, "With -all-ips, check IPv6 addresses only"),
+		timeout:      fs.Int("timeout", 10, "Connection timeout in seconds when fetching a remote certificate"),
+		starttls:     fs.String("starttls", "", "Upgrade the connection via STARTTLS: smtp, imap, pop3 or ftp (default: direct TLS)"),
+		showVersion:  fs.Bool("version", false, "Show version"),
 	}
 
 	// Custom usage: description, examples, the project link and flags grouped by
@@ -198,6 +206,8 @@ func NewDefaultFlagParser() FlagParser {
 		fmt.Fprintf(out, "\nMonitoring:\n")
 		flagLine("threshold")
 		flagLine("pin")
+		flagLine("expect-issuer")
+		flagLine("strict")
 		fmt.Fprintf(out, "\nMisc:\n")
 		flagLine("version")
 	}

@@ -61,8 +61,9 @@ type PrintOptions struct {
 	Color     bool // Colorize the human-readable output
 	Chain     bool // Print every certificate in the chain
 
-	Fingerprint bool   // Print the certificate and public-key SHA-256 fingerprints
-	Pin         string // Normalized hex pin to verify against (empty = disabled)
+	Fingerprint  bool   // Print the certificate and public-key SHA-256 fingerprints
+	Pin          string // Normalized hex pin to verify against (empty = disabled)
+	ExpectIssuer string // Warn when the issuer does not contain this substring (empty = disabled)
 }
 
 // CertificatePrinter defines an interface for printing certificate details.
@@ -249,6 +250,28 @@ func NormalizePin(raw string) (string, error) {
 // the certificate's SHA-256 fingerprint or its public-key (SPKI) fingerprint.
 func MatchesPin(c *x509.Certificate, pin string) bool {
 	return pin == Fingerprint(c) || pin == SPKIFingerprint(c)
+}
+
+// IssuerMatches reports whether the certificate's issuer DN contains substr,
+// case-insensitively. An empty substr matches anything.
+func IssuerMatches(c *x509.Certificate, substr string) bool {
+	if substr == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(c.Issuer.String()), strings.ToLower(substr))
+}
+
+// HasWarnings reports whether the certificate has any soft problem the tool warns
+// about — used by -strict to turn warnings into a non-zero exit.
+func HasWarnings(info *CertInfo) bool {
+	c := info.Cert
+	if notYetValid(c) || nameMismatch(info) || notServerAuth(c) {
+		return true
+	}
+	if earliestExpiringBefore(info.Chain) != nil {
+		return true
+	}
+	return info.Verified && info.ChainErr != nil
 }
 
 // CertificateFetcherImpl is an implementation of the CertificateFetcher interface.
@@ -714,6 +737,10 @@ func (p *CertificatePrinterImpl) printText(info *CertInfo, days int, opts PrintO
 	}
 	if notServerAuth(cert) {
 		fmt.Println(maybeColor("WARNING: certificate is not intended for server authentication", colorYellow, opts.Color))
+	}
+	if opts.ExpectIssuer != "" && !IssuerMatches(cert, opts.ExpectIssuer) {
+		msg := fmt.Sprintf("WARNING: issuer %q does not contain %q", cert.Issuer.String(), opts.ExpectIssuer)
+		fmt.Println(maybeColor(msg, colorRed, opts.Color))
 	}
 
 	if opts.Chain {

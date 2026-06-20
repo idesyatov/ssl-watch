@@ -625,6 +625,62 @@ func TestWritePrometheus(t *testing.T) {
 	}
 }
 
+// TestIssuerMatches verifies case-insensitive substring matching of the issuer DN.
+func TestIssuerMatches(t *testing.T) {
+	c := genCert(t, "issuer.example", time.Now().Add(90*24*time.Hour)) // self-signed: issuer CN = issuer.example
+	if !IssuerMatches(c, "") {
+		t.Error("empty substring should match anything")
+	}
+	if !IssuerMatches(c, "issuer.example") {
+		t.Error("expected a match on the issuer CN")
+	}
+	if !IssuerMatches(c, "ISSUER.EXAMPLE") {
+		t.Error("expected a case-insensitive match")
+	}
+	if IssuerMatches(c, "Let's Encrypt") {
+		t.Error("did not expect a match on an unrelated substring")
+	}
+}
+
+// TestHasWarnings verifies the soft-problem predicate used by -strict.
+func TestHasWarnings(t *testing.T) {
+	healthy := genCert(t, "healthy.example", time.Now().Add(90*24*time.Hour))
+	if HasWarnings(&CertInfo{Cert: healthy, Verified: true}) {
+		t.Error("a healthy verified cert should have no warnings")
+	}
+
+	notYet := &CertInfo{Cert: &x509.Certificate{
+		NotBefore: time.Now().Add(48 * time.Hour),
+		NotAfter:  time.Now().Add(90 * 24 * time.Hour),
+	}}
+	if !HasWarnings(notYet) {
+		t.Error("a not-yet-valid cert should warn")
+	}
+
+	leaf, inter, _ := issueChainCerts(t)
+	untrusted := &CertInfo{Cert: leaf, Chain: []*x509.Certificate{leaf, inter}, Verified: true, ChainErr: verifyErr(t, leaf, inter)}
+	if !HasWarnings(untrusted) {
+		t.Error("an untrusted chain should warn")
+	}
+}
+
+// TestPrint_ExpectIssuer verifies the issuer-mismatch warning appears only on a mismatch.
+func TestPrint_ExpectIssuer(t *testing.T) {
+	c := genCert(t, "issuer.example", time.Now().Add(90*24*time.Hour))
+	info := &CertInfo{Cert: c}
+	printer := &CertificatePrinterImpl{}
+
+	out := captureStdout(t, func() { printer.Print(info, PrintOptions{ExpectIssuer: "Nonexistent CA"}) })
+	if !strings.Contains(out, "WARNING: issuer") {
+		t.Errorf("expected an issuer-mismatch warning, got:\n%s", out)
+	}
+
+	out = captureStdout(t, func() { printer.Print(info, PrintOptions{ExpectIssuer: "issuer.example"}) })
+	if strings.Contains(out, "WARNING: issuer") {
+		t.Errorf("a matching issuer should not warn, got:\n%s", out)
+	}
+}
+
 // TestPrint_Fingerprint verifies the two fingerprint lines appear only with the flag.
 func TestPrint_Fingerprint(t *testing.T) {
 	c := genCert(t, "fp.example", time.Now().Add(90*24*time.Hour))

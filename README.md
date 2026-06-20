@@ -142,6 +142,8 @@ make build
 
 - `-threshold <days>` — exit with code `2` when days remaining is below this value; `0` disables.
 - `-pin sha256:<hex>` — verify the served certificate against a pinned fingerprint; the hex may be the certificate **or** the public-key (SPKI) SHA-256, and the check passes if it matches either. Exits with code `3` on a mismatch. Single target only (one domain, a file, or `-all-ips`).
+- `-expect-issuer <substring>` — assert the certificate issuer contains this substring (case-insensitive, matched against the full issuer DN, so it covers CN and O). Exits with code `3` on a mismatch — useful for catching an unexpected CA change. Works for a single domain or a batch.
+- `-strict` — treat warnings (not-yet-valid, name mismatch, non-server-auth, intermediate-expires-early, untrusted chain, missing SCTs) as failures and exit `2`. Turns the soft diagnostics into a hard CI/cron gate.
 
 In text mode, when writing to an interactive terminal, the days-remaining value and chain status are colorized (red/yellow/green). Color is disabled automatically when output is piped/redirected or when `NO_COLOR` is set.
 
@@ -319,8 +321,8 @@ ssl-watch -domain a.com,b.com -output prometheus > /var/lib/node_exporter/ssl_wa
 <summary><strong>Exit codes</strong></summary>
 
 - `0` — success (and, with `-threshold`, days remaining is at or above the threshold for every certificate in the chain).
-- `3` — `-pin` was set and the served certificate did not match the pinned fingerprint. Takes precedence over `2`.
-- `2` — a certificate in the chain (leaf or intermediate) expires within `-threshold` days.
+- `3` — an explicit expectation failed: `-pin` did not match, or `-expect-issuer` did not match. Takes precedence over `2`.
+- `2` — a certificate expires within `-threshold` days, or `-strict` is set and a warning fired.
 - `1` — an error occurred (connection failure, parse error, invalid arguments).
 
 When several domains are checked, the codes are aggregated: `1` if any domain failed to be retrieved, otherwise `2` if any certificate expires within `-threshold`, otherwise `0`.

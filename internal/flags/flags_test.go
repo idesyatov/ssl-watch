@@ -23,6 +23,8 @@ func TestParse(t *testing.T) {
 		"-threshold", "30",
 		"-output", "json",
 		"-chain",
+		"-expect-issuer", "Let's Encrypt",
+		"-strict",
 		"-fingerprint",
 		"-pin", "sha256:e4134cbc32c0c0976599c684ae0b6ac849b2d75546d934dfdb611fa0d9a0e9cb",
 		"-pem",
@@ -74,6 +76,12 @@ func TestParse(t *testing.T) {
 	}
 	if !cfg.Chain {
 		t.Error("expected chain to be true")
+	}
+	if cfg.ExpectIssuer != "Let's Encrypt" {
+		t.Errorf("expected expect-issuer to be parsed, got '%s'", cfg.ExpectIssuer)
+	}
+	if !cfg.Strict {
+		t.Error("expected strict to be true")
 	}
 	if !cfg.Fingerprint {
 		t.Error("expected fingerprint to be true")
@@ -140,7 +148,7 @@ func TestUsage(t *testing.T) {
 	parser.Usage()
 
 	out := buf.String()
-	for _, want := range []string{GitURL, "Usage:", "Target:", "Connection:", "Output:", "Monitoring:", "-domain", "-domain-file", "-threshold", "-timeout", "-starttls", "-chain", "-fingerprint", "-pin", "-pem", "-export", "-all-ips", "-4", "-6", "prometheus"} {
+	for _, want := range []string{GitURL, "Usage:", "Target:", "Connection:", "Output:", "Monitoring:", "-domain", "-domain-file", "-threshold", "-timeout", "-starttls", "-chain", "-fingerprint", "-pin", "-expect-issuer", "-strict", "-pem", "-export", "-all-ips", "-4", "-6", "prometheus"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected usage output to contain %q, got:\n%s", want, out)
 		}
