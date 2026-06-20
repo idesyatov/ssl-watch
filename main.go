@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/idesyatov/ssl-watch/internal/cert"
 	"github.com/idesyatov/ssl-watch/internal/flags"
@@ -67,102 +68,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create a new input validator to validate the parsed flags
-	validator := validation.NewDefaultInputValidator()
-	// At least one target (a domain or a certificate file) must be specified
-	if err := validator.Validate(strings.Join(domains, ","), cfg.CertFile); err != nil {
-		// If validation fails, report the error, print the usage and exit non-zero
+	// Reject unsupported flag combinations up front. validate is pure (no I/O,
+	// no exit) so the guard logic is unit-testable; main owns the reporting.
+	if err := validate(cfg, domains); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
 		parser.Usage()
 		os.Exit(1)
 	}
 
-	// Validate the requested output format
-	if cfg.Output != "text" && cfg.Output != "json" && cfg.Output != "prometheus" {
-		fmt.Fprintf(os.Stderr, "Error: invalid -output %q (expected \"text\", \"json\" or \"prometheus\")\n\n", cfg.Output)
-		parser.Usage()
-		os.Exit(1)
-	}
-
-	// Validate the connection timeout
-	if cfg.Timeout <= 0 {
-		fmt.Fprintf(os.Stderr, "Error: invalid -timeout %d (expected a positive number of seconds)\n\n", cfg.Timeout)
-		parser.Usage()
-		os.Exit(1)
-	}
-
-	// A fixed IP address makes sense only for a single domain
-	if cfg.IPAddr != "" && len(domains) > 1 {
-		fmt.Fprintf(os.Stderr, "Error: -ipaddr cannot be combined with multiple domains\n\n")
-		parser.Usage()
-		os.Exit(1)
-	}
-
-	// -all-ips resolves and checks every address of a single domain
-	if cfg.AllIPs {
-		switch {
-		case cfg.CertFile != "":
-			fmt.Fprintf(os.Stderr, "Error: -all-ips cannot be combined with -certfile\n\n")
-			parser.Usage()
-			os.Exit(1)
-		case cfg.IPAddr != "":
-			fmt.Fprintf(os.Stderr, "Error: -all-ips cannot be combined with -ipaddr\n\n")
-			parser.Usage()
-			os.Exit(1)
-		case cfg.Short:
-			fmt.Fprintf(os.Stderr, "Error: -all-ips cannot be combined with -short\n\n")
-			parser.Usage()
-			os.Exit(1)
-		case cfg.ExpectIssuer != "" || cfg.Strict:
-			fmt.Fprintf(os.Stderr, "Error: -all-ips cannot be combined with -expect-issuer/-strict\n\n")
-			parser.Usage()
-			os.Exit(1)
-		case len(domains) != 1:
-			fmt.Fprintf(os.Stderr, "Error: -all-ips requires exactly one domain\n\n")
-			parser.Usage()
-			os.Exit(1)
-		}
-	}
-
-	// -4/-6 restrict the address family and only make sense with -all-ips
-	if cfg.IPv4Only && cfg.IPv6Only {
-		fmt.Fprintf(os.Stderr, "Error: -4 and -6 cannot be combined\n\n")
-		parser.Usage()
-		os.Exit(1)
-	}
-	if (cfg.IPv4Only || cfg.IPv6Only) && !cfg.AllIPs {
-		fmt.Fprintf(os.Stderr, "Error: -4/-6 can only be used with -all-ips\n\n")
-		parser.Usage()
-		os.Exit(1)
-	}
-
-	// -cafile / -servername affect the live connection and its verification, so
-	// they need a network target and -cafile contradicts -insecure.
-	if cfg.CAFile != "" && cfg.Insecure {
-		fmt.Fprintf(os.Stderr, "Error: -cafile cannot be combined with -insecure\n\n")
-		parser.Usage()
-		os.Exit(1)
-	}
-	if (cfg.CAFile != "" || cfg.ServerName != "") && cfg.CertFile != "" {
-		fmt.Fprintf(os.Stderr, "Error: -cafile/-servername cannot be combined with -certfile\n\n")
-		parser.Usage()
-		os.Exit(1)
-	}
-	if cfg.ServerName != "" && len(domains) > 1 {
-		fmt.Fprintf(os.Stderr, "Error: -servername cannot be combined with multiple domains\n\n")
-		parser.Usage()
-		os.Exit(1)
-	}
-
-	// -pin verifies one cert against an expected fingerprint, so a single pin
-	// makes sense only for a single target (one domain, a file, or -all-ips).
+	// -pin produces the normalized hex used for the match (validate already
+	// rejected -pin with multiple domains; here we surface a malformed value).
 	var pinHex string
 	if cfg.Pin != "" {
-		if len(domains) > 1 {
-			fmt.Fprintf(os.Stderr, "Error: -pin cannot be combined with multiple domains\n\n")
-			parser.Usage()
-			os.Exit(1)
-		}
 		pinHex, err = cert.NormalizePin(cfg.Pin)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: invalid -pin: %v\n\n", err)
@@ -171,69 +88,10 @@ func main() {
 		}
 	}
 
-	// -pem / -export dump the served chain as PEM, an action distinct from the
-	// normal report. They need a single direct target and replace the report, so
-	// they cannot be combined with another output format or a verification flag.
-	if cfg.Pem || cfg.Export != "" {
-		switch {
-		case cfg.Pem && cfg.Export != "":
-			fmt.Fprintf(os.Stderr, "Error: -pem and -export cannot be combined\n\n")
-			parser.Usage()
-			os.Exit(1)
-		case cfg.Output != "text":
-			fmt.Fprintf(os.Stderr, "Error: -pem/-export cannot be combined with -output %s\n\n", cfg.Output)
-			parser.Usage()
-			os.Exit(1)
-		case cfg.AllIPs:
-			fmt.Fprintf(os.Stderr, "Error: -pem/-export cannot be combined with -all-ips\n\n")
-			parser.Usage()
-			os.Exit(1)
-		case len(domains) > 1:
-			fmt.Fprintf(os.Stderr, "Error: -pem/-export require a single target\n\n")
-			parser.Usage()
-			os.Exit(1)
-		case cfg.Pin != "":
-			fmt.Fprintf(os.Stderr, "Error: -pem/-export cannot be combined with -pin\n\n")
-			parser.Usage()
-			os.Exit(1)
-		case cfg.Threshold > 0:
-			fmt.Fprintf(os.Stderr, "Error: -pem/-export cannot be combined with -threshold\n\n")
-			parser.Usage()
-			os.Exit(1)
-		case cfg.ExpectIssuer != "" || cfg.Strict:
-			fmt.Fprintf(os.Stderr, "Error: -pem/-export cannot be combined with -expect-issuer/-strict\n\n")
-			parser.Usage()
-			os.Exit(1)
-		}
-	}
-
-	// Prometheus output exposes one metric set per fetched domain, so it is for
-	// remote domains only (no local file, no per-address -all-ips in this version).
-	if cfg.Output == "prometheus" {
-		switch {
-		case cfg.AllIPs:
-			fmt.Fprintf(os.Stderr, "Error: -output prometheus cannot be combined with -all-ips\n\n")
-			parser.Usage()
-			os.Exit(1)
-		case cfg.CertFile != "":
-			fmt.Fprintf(os.Stderr, "Error: -output prometheus cannot be combined with -certfile\n\n")
-			parser.Usage()
-			os.Exit(1)
-		}
-	}
-
-	// Validate the STARTTLS protocol and pick the protocol's default port when
-	// the port was left at its default.
-	if cfg.StartTLS != "" {
-		port, ok := starttlsPorts[cfg.StartTLS]
-		if !ok {
-			fmt.Fprintf(os.Stderr, "Error: invalid -starttls %q (expected smtp, imap, pop3 or ftp)\n\n", cfg.StartTLS)
-			parser.Usage()
-			os.Exit(1)
-		}
-		if cfg.Port == defaultPort {
-			cfg.Port = port
-		}
+	// With -starttls, substitute the protocol's default port when the port was
+	// left at its default (validate has confirmed the protocol is known).
+	if cfg.StartTLS != "" && cfg.Port == defaultPort {
+		cfg.Port = starttlsPorts[cfg.StartTLS]
 	}
 
 	// Create instances of the certificate fetcher, loader, and printer
@@ -307,6 +165,88 @@ func main() {
 
 	// Multiple domains — mass check with aggregated output and exit code.
 	os.Exit(runBatch(fetcher, printer, domains, cfg, opts, fetchOpts))
+}
+
+// validate reports the first unsupported flag combination in cfg, or nil. It is
+// pure — no I/O and no process exit — so every guard is unit-testable.
+func validate(cfg flags.Config, domains []string) error {
+	// At least one target (a domain or a certificate file) must be specified.
+	if err := validation.NewDefaultInputValidator().Validate(strings.Join(domains, ","), cfg.CertFile); err != nil {
+		return err
+	}
+	if cfg.Output != "text" && cfg.Output != "json" && cfg.Output != "prometheus" {
+		return fmt.Errorf("invalid -output %q (expected \"text\", \"json\" or \"prometheus\")", cfg.Output)
+	}
+	if cfg.Timeout <= 0 {
+		return fmt.Errorf("invalid -timeout %d (expected a positive number of seconds)", cfg.Timeout)
+	}
+	if cfg.IPAddr != "" && len(domains) > 1 {
+		return errors.New("-ipaddr cannot be combined with multiple domains")
+	}
+	if cfg.AllIPs {
+		switch {
+		case cfg.CertFile != "":
+			return errors.New("-all-ips cannot be combined with -certfile")
+		case cfg.IPAddr != "":
+			return errors.New("-all-ips cannot be combined with -ipaddr")
+		case cfg.Short:
+			return errors.New("-all-ips cannot be combined with -short")
+		case cfg.ExpectIssuer != "" || cfg.Strict:
+			return errors.New("-all-ips cannot be combined with -expect-issuer/-strict")
+		case len(domains) != 1:
+			return errors.New("-all-ips requires exactly one domain")
+		}
+	}
+	if cfg.IPv4Only && cfg.IPv6Only {
+		return errors.New("-4 and -6 cannot be combined")
+	}
+	if (cfg.IPv4Only || cfg.IPv6Only) && !cfg.AllIPs {
+		return errors.New("-4/-6 can only be used with -all-ips")
+	}
+	if cfg.CAFile != "" && cfg.Insecure {
+		return errors.New("-cafile cannot be combined with -insecure")
+	}
+	if (cfg.CAFile != "" || cfg.ServerName != "") && cfg.CertFile != "" {
+		return errors.New("-cafile/-servername cannot be combined with -certfile")
+	}
+	if cfg.ServerName != "" && len(domains) > 1 {
+		return errors.New("-servername cannot be combined with multiple domains")
+	}
+	if cfg.Pin != "" && len(domains) > 1 {
+		return errors.New("-pin cannot be combined with multiple domains")
+	}
+	if cfg.Pem || cfg.Export != "" {
+		switch {
+		case cfg.Pem && cfg.Export != "":
+			return errors.New("-pem and -export cannot be combined")
+		case cfg.Output != "text":
+			return fmt.Errorf("-pem/-export cannot be combined with -output %s", cfg.Output)
+		case cfg.AllIPs:
+			return errors.New("-pem/-export cannot be combined with -all-ips")
+		case len(domains) > 1:
+			return errors.New("-pem/-export require a single target")
+		case cfg.Pin != "":
+			return errors.New("-pem/-export cannot be combined with -pin")
+		case cfg.Threshold > 0:
+			return errors.New("-pem/-export cannot be combined with -threshold")
+		case cfg.ExpectIssuer != "" || cfg.Strict:
+			return errors.New("-pem/-export cannot be combined with -expect-issuer/-strict")
+		}
+	}
+	if cfg.Output == "prometheus" {
+		switch {
+		case cfg.AllIPs:
+			return errors.New("-output prometheus cannot be combined with -all-ips")
+		case cfg.CertFile != "":
+			return errors.New("-output prometheus cannot be combined with -certfile")
+		}
+	}
+	if cfg.StartTLS != "" {
+		if _, ok := starttlsPorts[cfg.StartTLS]; !ok {
+			return fmt.Errorf("invalid -starttls %q (expected smtp, imap, pop3 or ftp)", cfg.StartTLS)
+		}
+	}
+	return nil
 }
 
 // runExport writes the served certificate chain as PEM — to stdout (-pem) or to

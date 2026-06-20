@@ -37,6 +37,44 @@ func captureStdout(t *testing.T, fn func()) string {
 	return string(out)
 }
 
+// TestValidate covers the flag-combination guards extracted from main().
+func TestValidate(t *testing.T) {
+	ok := flags.Config{Output: "text", Timeout: 10}
+	one := []string{"a.com"}
+	two := []string{"a.com", "b.com"}
+
+	cases := []struct {
+		name    string
+		cfg     flags.Config
+		domains []string
+		wantErr bool
+	}{
+		{"single domain", ok, one, false},
+		{"certfile only", flags.Config{Output: "text", Timeout: 10, CertFile: "c.pem"}, nil, false},
+		{"no target", ok, nil, true},
+		{"bad output", flags.Config{Output: "yaml", Timeout: 10}, one, true},
+		{"bad timeout", flags.Config{Output: "text", Timeout: 0}, one, true},
+		{"ipaddr multi", flags.Config{Output: "text", Timeout: 10, IPAddr: "1.2.3.4"}, two, true},
+		{"all-ips + certfile", flags.Config{Output: "text", Timeout: 10, AllIPs: true, CertFile: "c.pem"}, one, true},
+		{"all-ips + strict", flags.Config{Output: "text", Timeout: 10, AllIPs: true, Strict: true}, one, true},
+		{"all-ips multi", flags.Config{Output: "text", Timeout: 10, AllIPs: true}, two, true},
+		{"-4 without all-ips", flags.Config{Output: "text", Timeout: 10, IPv4Only: true}, one, true},
+		{"cafile + insecure", flags.Config{Output: "text", Timeout: 10, CAFile: "r.pem", Insecure: true}, one, true},
+		{"servername multi", flags.Config{Output: "text", Timeout: 10, ServerName: "x"}, two, true},
+		{"pin multi", flags.Config{Output: "text", Timeout: 10, Pin: "sha256:ab"}, two, true},
+		{"pem + json", flags.Config{Output: "json", Timeout: 10, Pem: true}, one, true},
+		{"pem + export", flags.Config{Output: "text", Timeout: 10, Pem: true, Export: "f"}, one, true},
+		{"prometheus + all-ips", flags.Config{Output: "prometheus", Timeout: 10, AllIPs: true}, one, true},
+		{"bad starttls", flags.Config{Output: "text", Timeout: 10, StartTLS: "gopher"}, one, true},
+		{"good starttls", flags.Config{Output: "text", Timeout: 10, StartTLS: "smtp"}, one, false},
+	}
+	for _, tc := range cases {
+		if err := validate(tc.cfg, tc.domains); (err != nil) != tc.wantErr {
+			t.Errorf("%s: validate err=%v, wantErr=%v", tc.name, err, tc.wantErr)
+		}
+	}
+}
+
 // fakeFetcher returns canned certificate info or errors per domain.
 type fakeFetcher struct {
 	infos map[string]*cert.CertInfo
