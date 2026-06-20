@@ -123,8 +123,10 @@ make build
 
 - `-port <port>` — port to connect to (default `443`; with `-starttls` the protocol's default port is used unless overridden).
 - `-ipaddr <ipaddr>` — connect to a specific IP (only valid with a single domain).
+- `-servername <name>` — SNI and hostname to verify against, overriding the domain (e.g. to check a specific vhost's certificate on a host reached by `-ipaddr`).
 - `-starttls <proto>` — upgrade via STARTTLS before reading the certificate: `smtp`, `imap`, `pop3` or `ftp`.
 - `-timeout <seconds>` — connection timeout when fetching (default `10`).
+- `-cafile <path>` — verify the chain against the roots in this PEM bundle **instead of** the system roots (like `openssl verify -CAfile` / `curl --cacert`). Useful for an internal/corporate/national CA. Cannot be combined with `-insecure`.
 - `-insecure` — skip certificate chain verification (e.g. for self-signed certs).
 
 **Output**

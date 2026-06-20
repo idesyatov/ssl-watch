@@ -18,6 +18,8 @@ func TestParse(t *testing.T) {
 		"-certfile", "cert.pem",
 		"-port", "443",
 		"-ipaddr", "192.168.1.1",
+		"-servername", "vhost.example.com",
+		"-cafile", "roots.pem",
 		"-short",
 		"-insecure",
 		"-threshold", "30",
@@ -52,6 +54,12 @@ func TestParse(t *testing.T) {
 	}
 	if cfg.IPAddr != "192.168.1.1" {
 		t.Errorf("expected ipaddr to be '192.168.1.1', got '%s'", cfg.IPAddr)
+	}
+	if cfg.ServerName != "vhost.example.com" {
+		t.Errorf("expected servername to be parsed, got '%s'", cfg.ServerName)
+	}
+	if cfg.CAFile != "roots.pem" {
+		t.Errorf("expected cafile to be 'roots.pem', got '%s'", cfg.CAFile)
 	}
 	if !cfg.Short {
 		t.Error("expected short to be true")
@@ -148,7 +156,7 @@ func TestUsage(t *testing.T) {
 	parser.Usage()
 
 	out := buf.String()
-	for _, want := range []string{GitURL, "Usage:", "Target:", "Connection:", "Output:", "Monitoring:", "-domain", "-domain-file", "-threshold", "-timeout", "-starttls", "-chain", "-fingerprint", "-pin", "-expect-issuer", "-strict", "-pem", "-export", "-all-ips", "-4", "-6", "prometheus"} {
+	for _, want := range []string{GitURL, "Usage:", "Target:", "Connection:", "Output:", "Monitoring:", "-domain", "-domain-file", "-threshold", "-timeout", "-starttls", "-cafile", "-servername", "-chain", "-fingerprint", "-pin", "-expect-issuer", "-strict", "-pem", "-export", "-all-ips", "-4", "-6", "prometheus"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected usage output to contain %q, got:\n%s", want, out)
 		}

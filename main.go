@@ -136,6 +136,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	// -cafile / -servername affect the live connection and its verification, so
+	// they need a network target and -cafile contradicts -insecure.
+	if cfg.CAFile != "" && cfg.Insecure {
+		fmt.Fprintf(os.Stderr, "Error: -cafile cannot be combined with -insecure\n\n")
+		parser.Usage()
+		os.Exit(1)
+	}
+	if (cfg.CAFile != "" || cfg.ServerName != "") && cfg.CertFile != "" {
+		fmt.Fprintf(os.Stderr, "Error: -cafile/-servername cannot be combined with -certfile\n\n")
+		parser.Usage()
+		os.Exit(1)
+	}
+	if cfg.ServerName != "" && len(domains) > 1 {
+		fmt.Fprintf(os.Stderr, "Error: -servername cannot be combined with multiple domains\n\n")
+		parser.Usage()
+		os.Exit(1)
+	}
+
 	// -pin verifies one cert against an expected fingerprint, so a single pin
 	// makes sense only for a single target (one domain, a file, or -all-ips).
 	var pinHex string
@@ -235,14 +253,31 @@ func main() {
 	}
 	timeout := time.Duration(cfg.Timeout) * time.Second
 
+	// Connection/verification options shared by every fetch path. -cafile replaces
+	// the system roots; -servername overrides the SNI and verified name.
+	fetchOpts := cert.FetchOptions{
+		Insecure:   cfg.Insecure,
+		Timeout:    timeout,
+		StartTLS:   cfg.StartTLS,
+		ServerName: cfg.ServerName,
+	}
+	if cfg.CAFile != "" {
+		roots, loadErr := cert.LoadCAFile(cfg.CAFile)
+		if loadErr != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", loadErr)
+			os.Exit(1)
+		}
+		fetchOpts.Roots = roots
+	}
+
 	// Prometheus exposition: fetch every domain and emit one metric set each.
 	if cfg.Output == "prometheus" {
-		os.Exit(runPrometheus(fetcher, domains, cfg, timeout, pinHex))
+		os.Exit(runPrometheus(fetcher, domains, cfg, fetchOpts, pinHex))
 	}
 
 	// -all-ips: resolve the domain and check the certificate on every address.
 	if cfg.AllIPs {
-		os.Exit(runAllIPs(fetcher, domains[0], cfg, opts, timeout))
+		os.Exit(runAllIPs(fetcher, domains[0], cfg, opts, fetchOpts))
 	}
 
 	// Single target — a certificate file or exactly one domain — keeps the
@@ -259,7 +294,7 @@ func main() {
 		return
 	}
 	if len(domains) == 1 {
-		info, err := fetcher.Fetch(domains[0], cfg.Port, cfg.IPAddr, cfg.Insecure, timeout, cfg.StartTLS)
+		info, err := fetcher.Fetch(domains[0], cfg.Port, cfg.IPAddr, fetchOpts)
 		if err != nil {
 			log.Fatalf("Error retrieving certificate: %v", err)
 		}
@@ -271,7 +306,7 @@ func main() {
 	}
 
 	// Multiple domains — mass check with aggregated output and exit code.
-	os.Exit(runBatch(fetcher, printer, domains, cfg, opts, timeout))
+	os.Exit(runBatch(fetcher, printer, domains, cfg, opts, fetchOpts))
 }
 
 // runExport writes the served certificate chain as PEM — to stdout (-pem) or to
@@ -298,12 +333,12 @@ func runExport(info *cert.CertInfo, cfg flags.Config) int {
 // exposition format to stdout. It returns the aggregated exit code: 1 if any
 // domain failed to be retrieved, otherwise 2 if any certificate expires within
 // -threshold, otherwise 0.
-func runPrometheus(fetcher cert.CertificateFetcher, domains []string, cfg flags.Config, timeout time.Duration, pinHex string) int {
+func runPrometheus(fetcher cert.CertificateFetcher, domains []string, cfg flags.Config, fetchOpts cert.FetchOptions, pinHex string) int {
 	samples := make([]cert.PromSample, 0, len(domains))
 	hadError := false
 	expiring := false
 	for _, d := range domains {
-		info, err := fetcher.Fetch(d, cfg.Port, cfg.IPAddr, cfg.Insecure, timeout, cfg.StartTLS)
+		info, err := fetcher.Fetch(d, cfg.Port, cfg.IPAddr, fetchOpts)
 		if err != nil {
 			hadError = true
 			samples = append(samples, cert.PromSample{Domain: d, Err: err})
@@ -353,7 +388,7 @@ func printSingle(printer cert.CertificatePrinter, info *cert.CertInfo, cfg flags
 // stderr. It returns the process exit code: 1 if any domain failed to be
 // retrieved, otherwise 2 if any certificate in a chain expires within the
 // threshold, otherwise 0.
-func runBatch(fetcher cert.CertificateFetcher, printer cert.CertificatePrinter, domains []string, cfg flags.Config, opts cert.PrintOptions, timeout time.Duration) int {
+func runBatch(fetcher cert.CertificateFetcher, printer cert.CertificatePrinter, domains []string, cfg flags.Config, opts cert.PrintOptions, fetchOpts cert.FetchOptions) int {
 	hadError := false
 	expiring := false
 	issuerFail := false
@@ -362,7 +397,7 @@ func runBatch(fetcher cert.CertificateFetcher, printer cert.CertificatePrinter, 
 	var entries []any
 
 	for _, d := range domains {
-		info, err := fetcher.Fetch(d, cfg.Port, cfg.IPAddr, cfg.Insecure, timeout, cfg.StartTLS)
+		info, err := fetcher.Fetch(d, cfg.Port, cfg.IPAddr, fetchOpts)
 		if err != nil {
 			hadError = true
 			if opts.JSON {
@@ -423,7 +458,7 @@ func runBatch(fetcher cert.CertificateFetcher, printer cert.CertificatePrinter, 
 // address failed for a real reason (addresses unreachable from this host are
 // skipped, not errors), otherwise 2 if the certificates differ or any expires
 // within -threshold, otherwise 0.
-func runAllIPs(fetcher cert.CertificateFetcher, domain string, cfg flags.Config, opts cert.PrintOptions, timeout time.Duration) int {
+func runAllIPs(fetcher cert.CertificateFetcher, domain string, cfg flags.Config, opts cert.PrintOptions, fetchOpts cert.FetchOptions) int {
 	ips, err := net.LookupIP(domain)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to resolve %s: %v\n", domain, err)
@@ -453,7 +488,7 @@ func runAllIPs(fetcher cert.CertificateFetcher, domain string, cfg flags.Config,
 
 	results := make([]cert.IPResult, 0, len(addrs))
 	for _, ip := range addrs {
-		info, err := fetcher.Fetch(domain, cfg.Port, ip, cfg.Insecure, timeout, cfg.StartTLS)
+		info, err := fetcher.Fetch(domain, cfg.Port, ip, fetchOpts)
 		results = append(results, cert.IPResult{
 			IP:      ip,
 			Info:    info,

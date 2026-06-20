@@ -35,15 +35,22 @@ type CertInfo struct {
 	ChainErr    error               // Chain verification error; nil means valid (only meaningful when Verified)
 }
 
+// FetchOptions controls how Fetch connects and verifies. The zero value dials
+// direct TLS, verifies against the system roots, and uses the domain as the SNI.
+type FetchOptions struct {
+	Insecure   bool           // Skip chain verification (still retrieves the cert)
+	Timeout    time.Duration  // Bounds the connection (and STARTTLS negotiation)
+	StartTLS   string         // smtp/imap/pop3/ftp to upgrade via STARTTLS; empty = direct TLS
+	ServerName string         // SNI and hostname to verify against; empty = use domain
+	Roots      *x509.CertPool // Trust anchors for verification; nil = system roots
+}
+
 // CertificateFetcher defines an interface for fetching certificates from a domain or IP address.
 type CertificateFetcher interface {
-	// Fetch retrieves the certificate for the specified domain and port, or IP address.
-	// When insecure is false, the certificate chain is verified against the system roots.
-	// timeout bounds the connection attempt. When starttls is non-empty (one of
-	// "smtp", "imap", "pop3", "ftp") the connection is upgraded to TLS via the
-	// protocol's STARTTLS command instead of starting TLS directly.
+	// Fetch retrieves the certificate for the specified domain and port, or IP
+	// address, with the connection and verification behaviour set by opts.
 	// Returns the certificate information and an error if any occurred.
-	Fetch(domain, port, ipaddr string, insecure bool, timeout time.Duration, starttls string) (*CertInfo, error)
+	Fetch(domain, port, ipaddr string, opts FetchOptions) (*CertInfo, error)
 }
 
 // CertificateLoader defines an interface for loading certificates from a file.
@@ -281,18 +288,23 @@ type CertificateFetcherImpl struct{}
 // Fetch connects to the specified domain or IP address and retrieves the TLS certificate.
 // The handshake always skips verification so that details of an invalid certificate can
 // still be displayed; the chain is then verified separately unless insecure is true.
-func (f *CertificateFetcherImpl) Fetch(domain, port, ipaddr string, insecure bool, timeout time.Duration, starttls string) (*CertInfo, error) {
+func (f *CertificateFetcherImpl) Fetch(domain, port, ipaddr string, opts FetchOptions) (*CertInfo, error) {
 	host := domain
 	if ipaddr != "" {
 		host = ipaddr
 	}
+	// The name presented (SNI) and verified against; -servername overrides the domain.
+	name := domain
+	if opts.ServerName != "" {
+		name = opts.ServerName
+	}
 	address := net.JoinHostPort(host, port)
 	tlsConfig := &tls.Config{
 		InsecureSkipVerify: true,
-		ServerName:         domain,
+		ServerName:         name,
 	}
 
-	conn, err := dialTLS(address, timeout, starttls, tlsConfig)
+	conn, err := dialTLS(address, opts.Timeout, opts.StartTLS, tlsConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -315,26 +327,27 @@ func (f *CertificateFetcherImpl) Fetch(domain, port, ipaddr string, insecure boo
 		UsedIP:      usedIP,
 		TLSVersion:  tls.VersionName(state.Version),
 		CipherSuite: tls.CipherSuiteName(state.CipherSuite),
-		CheckedName: domain,
+		CheckedName: name,
 	}
-	if !insecure {
+	if !opts.Insecure {
 		info.Verified = true
-		info.ChainErr = verifyChain(certs, domain)
+		info.ChainErr = verifyChain(certs, name, opts.Roots)
 	}
 	return info, nil
 }
 
-// verifyChain validates the leaf certificate (certs[0]) against the system root
-// store, using the remaining peer certificates as intermediates. The check covers
-// trust, hostname match and validity period.
-func verifyChain(certs []*x509.Certificate, domain string) error {
+// verifyChain validates the leaf certificate (certs[0]) against roots (nil = the
+// system root store), using the remaining peer certificates as intermediates. The
+// check covers trust, hostname match and validity period.
+func verifyChain(certs []*x509.Certificate, name string, roots *x509.CertPool) error {
 	intermediates := x509.NewCertPool()
 	for _, c := range certs[1:] {
 		intermediates.AddCert(c)
 	}
 	_, err := certs[0].Verify(x509.VerifyOptions{
-		DNSName:       domain,
+		DNSName:       name,
 		Intermediates: intermediates,
+		Roots:         roots,
 	})
 	return err
 }
@@ -624,6 +637,21 @@ func (l *CertificateLoaderImpl) Load(certFile string) (*CertInfo, error) {
 	}
 
 	return &CertInfo{Cert: cert, FromFile: true}, nil
+}
+
+// LoadCAFile reads a PEM bundle and returns a certificate pool containing its
+// certificates, for use as the verification roots (replacing the system roots).
+// It returns an error if the file cannot be read or holds no certificates.
+func LoadCAFile(path string) (*x509.CertPool, error) {
+	pemBytes, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read CA file %s: %v", path, err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pemBytes) {
+		return nil, fmt.Errorf("no certificates found in CA file %s", path)
+	}
+	return pool, nil
 }
 
 // CertificatePrinterImpl is an implementation of the CertificatePrinter interface.

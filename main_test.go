@@ -43,7 +43,7 @@ type fakeFetcher struct {
 	errs  map[string]error
 }
 
-func (f *fakeFetcher) Fetch(domain, port, ipaddr string, insecure bool, timeout time.Duration, starttls string) (*cert.CertInfo, error) {
+func (f *fakeFetcher) Fetch(domain, port, ipaddr string, opts cert.FetchOptions) (*cert.CertInfo, error) {
 	if err, ok := f.errs[domain]; ok {
 		return nil, err
 	}
@@ -150,7 +150,7 @@ func TestRunBatch_JSON(t *testing.T) {
 
 	var code int
 	out := captureStdout(t, func() {
-		code = runBatch(fetcher, &cert.CertificatePrinterImpl{}, domains, cfg, opts, time.Second)
+		code = runBatch(fetcher, &cert.CertificatePrinterImpl{}, domains, cfg, opts, cert.FetchOptions{Timeout: time.Second})
 	})
 
 	if code != 1 {
@@ -187,7 +187,7 @@ func TestRunBatch_Text(t *testing.T) {
 
 	var code int
 	out := captureStdout(t, func() {
-		code = runBatch(fetcher, &cert.CertificatePrinterImpl{}, domains, cfg, opts, time.Second)
+		code = runBatch(fetcher, &cert.CertificatePrinterImpl{}, domains, cfg, opts, cert.FetchOptions{Timeout: time.Second})
 	})
 
 	if code != 2 {

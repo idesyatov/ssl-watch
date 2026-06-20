@@ -133,7 +133,7 @@ func TestCertificateFetcherImpl_Fetch(t *testing.T) {
 	fetcher := &CertificateFetcherImpl{}
 
 	// Insecure: the certificate is returned and the chain is not verified.
-	info, err := fetcher.Fetch(host, port, "", true, 5*time.Second, "")
+	info, err := fetcher.Fetch(host, port, "", FetchOptions{Insecure: true, Timeout: 5 * time.Second})
 	if err != nil {
 		t.Fatalf("unexpected error from Fetch: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestCertificateFetcherImpl_Fetch(t *testing.T) {
 
 	// Secure: the chain is verified and, for this self-signed test cert against
 	// the system roots, fails — but Fetch still succeeds and records the error.
-	info, err = fetcher.Fetch(host, port, "", false, 5*time.Second, "")
+	info, err = fetcher.Fetch(host, port, "", FetchOptions{Timeout: 5 * time.Second})
 	if err != nil {
 		t.Fatalf("unexpected error from Fetch (secure): %v", err)
 	}
@@ -164,6 +164,27 @@ func TestCertificateFetcherImpl_Fetch(t *testing.T) {
 	}
 	if info.ChainErr == nil {
 		t.Error("expected chain verification to fail for the self-signed test certificate")
+	}
+
+	// With -cafile (Roots) set to the server's own certificate, the same chain
+	// now verifies — exercising the replace-roots path.
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	info, err = fetcher.Fetch(host, port, "", FetchOptions{Timeout: 5 * time.Second, Roots: pool})
+	if err != nil {
+		t.Fatalf("unexpected error from Fetch (cafile): %v", err)
+	}
+	if info.ChainErr != nil {
+		t.Errorf("expected verification to pass against the custom root, got: %v", info.ChainErr)
+	}
+
+	// -servername overrides the verified name (recorded in CheckedName).
+	info, err = fetcher.Fetch(host, port, "", FetchOptions{Insecure: true, Timeout: 5 * time.Second, ServerName: "override.example"})
+	if err != nil {
+		t.Fatalf("unexpected error from Fetch (servername): %v", err)
+	}
+	if info.CheckedName != "override.example" {
+		t.Errorf("expected CheckedName 'override.example', got %q", info.CheckedName)
 	}
 }
 
@@ -678,6 +699,33 @@ func TestPrint_ExpectIssuer(t *testing.T) {
 	out = captureStdout(t, func() { printer.Print(info, PrintOptions{ExpectIssuer: "issuer.example"}) })
 	if strings.Contains(out, "WARNING: issuer") {
 		t.Errorf("a matching issuer should not warn, got:\n%s", out)
+	}
+}
+
+// TestLoadCAFile verifies a valid PEM bundle loads and bad inputs error out.
+func TestLoadCAFile(t *testing.T) {
+	c := genCert(t, "ca.example", time.Now().Add(365*24*time.Hour))
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})
+	dir := t.TempDir()
+
+	good := dir + "/ca.pem"
+	if err := os.WriteFile(good, pemBytes, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	pool, err := LoadCAFile(good)
+	if err != nil || pool == nil {
+		t.Fatalf("expected a pool, got pool=%v err=%v", pool, err)
+	}
+
+	bad := dir + "/bad.pem"
+	if err := os.WriteFile(bad, []byte("not a certificate"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := LoadCAFile(bad); err == nil {
+		t.Error("expected an error for a file with no certificates")
+	}
+	if _, err := LoadCAFile(dir + "/missing.pem"); err == nil {
+		t.Error("expected an error for a missing file")
 	}
 }
 
