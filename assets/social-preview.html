@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@500;700&family=JetBrains+Mono:wght@400;700&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body { width: 1280px; height: 640px; }
+
+  body {
+    background: #0d1117;
+    font-family: 'Inter', sans-serif;
+    color: #E6EDF3;
+    display: flex;
+    align-items: center;
+    padding: 80px;
+    gap: 56px;
+  }
+
+  .left { flex: 1; }
+
+  .title {
+    font-size: 96px;
+    font-weight: 700;
+    letter-spacing: -2px;
+    line-height: 1;
+  }
+  .rule {
+    width: 132px;
+    height: 6px;
+    background: #3FB950;
+    border-radius: 3px;
+    margin: 22px 0 34px;
+  }
+  .tagline {
+    font-size: 40px;
+    font-weight: 500;
+    color: #ADBAC7;
+    line-height: 1.25;
+  }
+  .features {
+    margin-top: 30px;
+    font-size: 25px;
+    color: #768390;
+  }
+  .footer {
+    margin-top: 48px;
+    font-size: 24px;
+    color: #539BF5;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .badge {
+    font-size: 21px;
+    color: #768390;
+    border: 1px solid #30363D;
+    border-radius: 999px;
+    padding: 4px 14px;
+  }
+
+  /* terminal window */
+  .term {
+    width: 470px;
+    background: #161B22;
+    border: 1px solid #30363D;
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0,0,0,.45);
+  }
+  .term .bar {
+    display: flex;
+    gap: 9px;
+    padding: 15px 18px;
+    border-bottom: 1px solid #21262D;
+  }
+  .dot { width: 13px; height: 13px; border-radius: 50%; }
+  .r { background: #FF5F56; }
+  .y { background: #FFBD2E; }
+  .g { background: #27C93F; }
+
+  .term .body {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 23px;
+    line-height: 1.6;
+    padding: 22px 24px 26px;
+    color: #ADBAC7;
+  }
+  .prompt { color: #E6EDF3; }
+  .cmd { color: #E6EDF3; font-weight: 700; }
+  .key { color: #768390; }
+  .yellow { color: #E3B341; font-weight: 700; }
+  .green  { color: #3FB950; font-weight: 700; }
+</style>
+</head>
+<body>
+  <div class="left">
+    <div class="title">ssl-watch</div>
+    <div class="rule"></div>
+    <div class="tagline">Monitor SSL/TLS expiry<br>from the CLI</div>
+    <div class="features">cron/CI exit codes &middot; JSON &amp; Prometheus &middot; STARTTLS</div>
+    <div class="footer">
+      github.com/idesyatov/ssl-watch
+      <span class="badge">Go &middot; MIT</span>
+    </div>
+  </div>
+
+  <div class="term">
+    <div class="bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+    <div class="body">
+<span class="prompt">$</span> <span class="cmd">ssl-watch -domain example.com</span><br>
+<span class="key">Days remaining:</span> <span class="yellow">12</span><br>
+<span class="key">TLS:</span> TLS 1.3<br>
+<span class="key">Chain:</span> <span class="green">VALID</span>
+    </div>
+  </div>
+</body>
+</html>
