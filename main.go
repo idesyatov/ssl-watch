@@ -149,6 +149,38 @@ func main() {
 		}
 	}
 
+	// -pem / -export dump the served chain as PEM, an action distinct from the
+	// normal report. They need a single direct target and replace the report, so
+	// they cannot be combined with another output format or a verification flag.
+	if cfg.Pem || cfg.Export != "" {
+		switch {
+		case cfg.Pem && cfg.Export != "":
+			fmt.Fprintf(os.Stderr, "Error: -pem and -export cannot be combined\n\n")
+			parser.Usage()
+			os.Exit(1)
+		case cfg.Output == "json":
+			fmt.Fprintf(os.Stderr, "Error: -pem/-export cannot be combined with -output json\n\n")
+			parser.Usage()
+			os.Exit(1)
+		case cfg.AllIPs:
+			fmt.Fprintf(os.Stderr, "Error: -pem/-export cannot be combined with -all-ips\n\n")
+			parser.Usage()
+			os.Exit(1)
+		case len(domains) > 1:
+			fmt.Fprintf(os.Stderr, "Error: -pem/-export require a single target\n\n")
+			parser.Usage()
+			os.Exit(1)
+		case cfg.Pin != "":
+			fmt.Fprintf(os.Stderr, "Error: -pem/-export cannot be combined with -pin\n\n")
+			parser.Usage()
+			os.Exit(1)
+		case cfg.Threshold > 0:
+			fmt.Fprintf(os.Stderr, "Error: -pem/-export cannot be combined with -threshold\n\n")
+			parser.Usage()
+			os.Exit(1)
+		}
+	}
+
 	// Validate the STARTTLS protocol and pick the protocol's default port when
 	// the port was left at its default.
 	if cfg.StartTLS != "" {
@@ -191,6 +223,9 @@ func main() {
 		if err != nil {
 			log.Fatalf("Error retrieving certificate: %v", err)
 		}
+		if cfg.Pem || cfg.Export != "" {
+			os.Exit(runExport(info, cfg))
+		}
 		printSingle(printer, info, cfg, opts)
 		return
 	}
@@ -199,12 +234,35 @@ func main() {
 		if err != nil {
 			log.Fatalf("Error retrieving certificate: %v", err)
 		}
+		if cfg.Pem || cfg.Export != "" {
+			os.Exit(runExport(info, cfg))
+		}
 		printSingle(printer, info, cfg, opts)
 		return
 	}
 
 	// Multiple domains — mass check with aggregated output and exit code.
 	os.Exit(runBatch(fetcher, printer, domains, cfg, opts, timeout))
+}
+
+// runExport writes the served certificate chain as PEM — to stdout (-pem) or to
+// a file (-export) — and returns the process exit code (0 on success, 1 on a
+// write error).
+func runExport(info *cert.CertInfo, cfg flags.Config) int {
+	pemBytes := cert.ChainPEM(info)
+	if cfg.Export != "" {
+		if err := os.WriteFile(cfg.Export, pemBytes, 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: failed to write %s: %v\n", cfg.Export, err)
+			return 1
+		}
+		fmt.Printf("Wrote %d certificate(s) to %s\n", strings.Count(string(pemBytes), "BEGIN CERTIFICATE"), cfg.Export)
+		return 0
+	}
+	if _, err := os.Stdout.Write(pemBytes); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to write PEM: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 // printSingle prints one certificate and exits with code 2 when it expires

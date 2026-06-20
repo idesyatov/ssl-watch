@@ -25,6 +25,8 @@ func TestParse(t *testing.T) {
 		"-chain",
 		"-fingerprint",
 		"-pin", "sha256:e4134cbc32c0c0976599c684ae0b6ac849b2d75546d934dfdb611fa0d9a0e9cb",
+		"-pem",
+		"-export", "out.pem",
 		"-all-ips",
 		"-4",
 		"-timeout", "5",
@@ -79,6 +81,12 @@ func TestParse(t *testing.T) {
 	if cfg.Pin != "sha256:e4134cbc32c0c0976599c684ae0b6ac849b2d75546d934dfdb611fa0d9a0e9cb" {
 		t.Errorf("expected pin to be parsed, got '%s'", cfg.Pin)
 	}
+	if !cfg.Pem {
+		t.Error("expected pem to be true")
+	}
+	if cfg.Export != "out.pem" {
+		t.Errorf("expected export to be 'out.pem', got '%s'", cfg.Export)
+	}
 	if !cfg.AllIPs {
 		t.Error("expected all-ips to be true")
 	}
@@ -132,7 +140,7 @@ func TestUsage(t *testing.T) {
 	parser.Usage()
 
 	out := buf.String()
-	for _, want := range []string{GitURL, "Usage:", "Target:", "Connection:", "Output:", "Monitoring:", "-domain", "-domain-file", "-threshold", "-timeout", "-starttls", "-chain", "-fingerprint", "-pin", "-all-ips", "-4", "-6"} {
+	for _, want := range []string{GitURL, "Usage:", "Target:", "Connection:", "Output:", "Monitoring:", "-domain", "-domain-file", "-threshold", "-timeout", "-starttls", "-chain", "-fingerprint", "-pin", "-pem", "-export", "-all-ips", "-4", "-6"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected usage output to contain %q, got:\n%s", want, out)
 		}

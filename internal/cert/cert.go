@@ -151,6 +151,17 @@ func chainList(info *CertInfo) []*x509.Certificate {
 	return []*x509.Certificate{info.Cert}
 }
 
+// ChainPEM returns the PEM encoding of every certificate available for info — the
+// served chain (leaf first) or just the leaf for a file-loaded certificate — as
+// one CERTIFICATE block per certificate.
+func ChainPEM(info *CertInfo) []byte {
+	var out []byte
+	for _, c := range chainList(info) {
+		out = append(out, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})...)
+	}
+	return out
+}
+
 // isWeakSignature reports whether the certificate is signed with a broken or
 // deprecated hash (MD2/MD5/SHA-1 family).
 func isWeakSignature(c *x509.Certificate) bool {

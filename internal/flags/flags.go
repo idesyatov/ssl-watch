@@ -28,6 +28,8 @@ type Config struct {
 	Chain       bool   // Print every certificate in the chain
 	Fingerprint bool   // Print the certificate and public-key SHA-256 fingerprints
 	Pin         string // Verify against a pinned fingerprint (sha256:<hex>); exit 3 on mismatch
+	Pem         bool   // Print the certificate chain as PEM to stdout
+	Export      string // Write the certificate chain as PEM to the given file
 	AllIPs      bool   // Check the certificate on every resolved IP of the domain
 	IPv4Only    bool   // Restrict -all-ips to IPv4 addresses
 	IPv6Only    bool   // Restrict -all-ips to IPv6 addresses
@@ -66,6 +68,8 @@ type DefaultFlagParser struct {
 	chain       *bool
 	fingerprint *bool
 	pin         *string
+	pem         *bool
+	export      *string
 	allIPs      *bool
 	ipv4Only    *bool
 	ipv6Only    *bool
@@ -91,6 +95,8 @@ func (d *DefaultFlagParser) Parse() Config {
 		Chain:       *d.chain,
 		Fingerprint: *d.fingerprint,
 		Pin:         *d.pin,
+		Pem:         *d.pem,
+		Export:      *d.export,
 		AllIPs:      *d.allIPs,
 		IPv4Only:    *d.ipv4Only,
 		IPv6Only:    *d.ipv6Only,
@@ -128,6 +134,8 @@ func NewDefaultFlagParser() FlagParser {
 		chain:       fs.Bool("chain", false, "Print every certificate in the chain"),
 		fingerprint: fs.Bool("fingerprint", false, "Print the certificate and public-key SHA-256 fingerprints"),
 		pin:         fs.String("pin", "", "Verify against a pinned fingerprint (sha256:<hex>, cert or public key); exit 3 on mismatch"),
+		pem:         fs.Bool("pem", false, "Print the certificate chain as PEM to stdout"),
+		export:      fs.String("export", "", "Write the certificate chain as PEM to the given file"),
 		allIPs:      fs.Bool("all-ips", false, "Check the certificate on every resolved IP of the domain (single domain only)"),
 		ipv4Only:    fs.Bool("4", false, "With -all-ips, check IPv4 addresses only"),
 		ipv6Only:    fs.Bool("6", false, "With -all-ips, check IPv6 addresses only"),
@@ -182,6 +190,8 @@ func NewDefaultFlagParser() FlagParser {
 		flagLine("short")
 		flagLine("chain")
 		flagLine("fingerprint")
+		flagLine("pem")
+		flagLine("export")
 		flagLine("all-ips")
 		flagLine("4")
 		flagLine("6")

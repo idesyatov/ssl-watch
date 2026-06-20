@@ -132,6 +132,8 @@ make build
 - `-short` — print only the number of days remaining.
 - `-chain` — print every certificate in the chain (subject, issuer, expiry).
 - `-fingerprint` — print the certificate and public-key (SPKI) SHA-256 fingerprints.
+- `-pem` — print the served certificate chain as PEM to stdout (single target; replaces the normal report).
+- `-export <file>` — write the served certificate chain as PEM to a file.
 - `-all-ips` — resolve every address of the domain and check the certificate on each, then report whether they match (single domain only).
 - `-4` / `-6` — with `-all-ips`, restrict the check to IPv4 or IPv6 addresses (optional; addresses unreachable from the host are skipped automatically anyway).
 
@@ -193,6 +195,10 @@ ssl-watch -domain example.com -fingerprint
 
 # Pin the certificate (or its public key); exit code 3 on mismatch
 ssl-watch -domain example.com -pin sha256:e4134cbc...
+
+# Export the served chain as PEM (to stdout or a file)
+ssl-watch -domain example.com -pem | openssl x509 -noout -text
+ssl-watch -domain example.com -export chain.pem
 
 # Check the certificate on every resolved IP (load balancers)
 ssl-watch -domain example.com -all-ips

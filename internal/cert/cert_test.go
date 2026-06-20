@@ -374,6 +374,38 @@ func TestMatchesPin(t *testing.T) {
 	}
 }
 
+// TestChainPEM verifies the PEM export contains one valid CERTIFICATE block per
+// certificate in the chain, and just the leaf when no chain is recorded.
+func TestChainPEM(t *testing.T) {
+	leaf := genCert(t, "leaf.example", time.Now().Add(90*24*time.Hour))
+	inter := genCert(t, "inter.example", time.Now().Add(200*24*time.Hour))
+
+	out := ChainPEM(&CertInfo{Cert: leaf, Chain: []*x509.Certificate{leaf, inter}})
+	n, rest := 0, out
+	for {
+		block, remaining := pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		rest = remaining
+		if block.Type != "CERTIFICATE" {
+			t.Errorf("unexpected PEM block type %q", block.Type)
+		}
+		if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+			t.Errorf("block %d is not a valid certificate: %v", n, err)
+		}
+		n++
+	}
+	if n != 2 {
+		t.Errorf("expected 2 PEM blocks, got %d", n)
+	}
+
+	single := ChainPEM(&CertInfo{Cert: leaf})
+	if got := strings.Count(string(single), "BEGIN CERTIFICATE"); got != 1 {
+		t.Errorf("expected 1 block for a single cert, got %d", got)
+	}
+}
+
 // TestPrint_Fingerprint verifies the two fingerprint lines appear only with the flag.
 func TestPrint_Fingerprint(t *testing.T) {
 	c := genCert(t, "fp.example", time.Now().Add(90*24*time.Hour))
