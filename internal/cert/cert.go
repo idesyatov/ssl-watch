@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -314,6 +315,128 @@ func verifyChain(certs []*x509.Certificate, domain string) error {
 	return err
 }
 
+// sctOID is the X.509 extension carrying embedded Signed Certificate Timestamps
+// (RFC 6962). Genuine publicly-trusted certificates are logged in Certificate
+// Transparency and carry this extension.
+var sctOID = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 11129, 2, 4, 2}
+
+// hasSCT reports whether the certificate carries embedded SCTs.
+func hasSCT(c *x509.Certificate) bool {
+	for _, ext := range c.Extensions {
+		if ext.Id.Equal(sctOID) {
+			return true
+		}
+	}
+	return false
+}
+
+// dnLabel renders a short "CN (O=org)" label, falling back gracefully.
+func dnLabel(cn string, orgs []string) string {
+	if cn == "" {
+		cn = "(no CN)"
+	}
+	if len(orgs) > 0 {
+		return fmt.Sprintf("%s (O=%s)", cn, orgs[0])
+	}
+	return cn
+}
+
+// chainBreak walks the served peer chain from the leaf and returns the highest
+// served certificate whose issuer is not itself served — the point where the
+// chain leaves the material the server sent. issuer is that certificate's issuer
+// label, selfSigned is true when the break certificate is self-signed (a served
+// root), and ok is false only when no chain is recorded.
+func chainBreak(info *CertInfo) (brk *x509.Certificate, issuer string, selfSigned, ok bool) {
+	chain := info.Chain
+	if len(chain) == 0 {
+		return nil, "", false, false
+	}
+	bySubject := make(map[string]*x509.Certificate, len(chain))
+	for _, c := range chain {
+		bySubject[string(c.RawSubject)] = c
+	}
+	cur := chain[0]
+	seen := make(map[string]bool)
+	for {
+		if string(cur.RawSubject) == string(cur.RawIssuer) {
+			return cur, dnLabel(cur.Subject.CommonName, cur.Subject.Organization), true, true
+		}
+		next, found := bySubject[string(cur.RawIssuer)]
+		if !found || seen[string(next.RawSubject)] {
+			return cur, dnLabel(cur.Issuer.CommonName, cur.Issuer.Organization), false, true
+		}
+		seen[string(cur.RawSubject)] = true
+		cur = next
+	}
+}
+
+// classifyChainErr turns a chain verification error into a machine kind and a
+// human-readable reason. Returns empty strings when the chain verified.
+func classifyChainErr(info *CertInfo) (kind, reason string) {
+	switch e := info.ChainErr.(type) {
+	case nil:
+		return "", ""
+	case x509.HostnameError:
+		return "hostname_mismatch", "hostname not covered by the certificate"
+	case x509.CertificateInvalidError:
+		if e.Reason == x509.Expired {
+			return "expired", "a certificate in the chain is expired or not yet valid"
+		}
+		return "invalid", e.Error()
+	case x509.UnknownAuthorityError:
+		if _, _, selfSigned, ok := chainBreak(info); ok && selfSigned {
+			return "untrusted_root", "chain ends at a self-signed root not in the system trust store"
+		}
+		return "unanchored", "not anchored to a trusted root"
+	default:
+		return "invalid", info.ChainErr.Error()
+	}
+}
+
+// untrustedIssuer returns the label of the issuer the chain could not be anchored
+// to, for the JSON view. Empty unless the failure is a trust/anchor problem.
+func untrustedIssuer(info *CertInfo) string {
+	if _, ok := info.ChainErr.(x509.UnknownAuthorityError); !ok {
+		return ""
+	}
+	_, issuer, _, ok := chainBreak(info)
+	if !ok {
+		return ""
+	}
+	return issuer
+}
+
+// issuerTrail renders "leaf ← intermediate (O=…) … [missing issuer marker]" up to
+// the break point, so the untrusted/missing anchor is visible at a glance.
+func issuerTrail(info *CertInfo) string {
+	brk, issuer, selfSigned, ok := chainBreak(info)
+	if !ok {
+		return ""
+	}
+	bySubject := make(map[string]*x509.Certificate, len(info.Chain))
+	for _, c := range info.Chain {
+		bySubject[string(c.RawSubject)] = c
+	}
+	var parts []string
+	cur := info.Chain[0]
+	for {
+		parts = append(parts, dnLabel(cur.Subject.CommonName, cur.Subject.Organization))
+		if cur == brk {
+			break
+		}
+		next, found := bySubject[string(cur.RawIssuer)]
+		if !found {
+			break
+		}
+		cur = next
+	}
+	trail := strings.Join(parts, " ← ")
+	if selfSigned {
+		return trail + "   [self-signed root, not in system trust store]"
+	}
+	return trail + fmt.Sprintf("   [%s: not served and not trusted]", issuer)
+}
+
 // dialTLS opens a TLS connection to address. When starttls is empty it dials TLS
 // directly; otherwise it connects in plaintext, upgrades via the protocol's
 // STARTTLS command and then performs the TLS handshake. The timeout bounds both
@@ -546,7 +669,14 @@ func (p *CertificatePrinterImpl) printText(info *CertInfo, days int, opts PrintO
 		if info.ChainErr == nil {
 			fmt.Printf("Chain: %s\n", maybeColor("VALID", colorGreen, opts.Color))
 		} else {
-			fmt.Printf("Chain: %s (%v)\n", maybeColor("INVALID", colorRed, opts.Color), info.ChainErr)
+			_, reason := classifyChainErr(info)
+			fmt.Printf("Chain: %s — %s\n", maybeColor("INVALID", colorRed, opts.Color), reason)
+			if trail := issuerTrail(info); trail != "" {
+				fmt.Printf("  %s\n", trail)
+			}
+			if !hasSCT(cert) {
+				fmt.Println(maybeColor("WARNING: no embedded SCTs — certificate is not in Certificate Transparency; not from a genuine public CA (possible private/re-signed cert)", colorRed, opts.Color))
+			}
 		}
 	}
 	if opts.Pin != "" {
@@ -645,6 +775,9 @@ type certPayload struct {
 	NotServerAuth bool         `json:"not_server_auth,omitempty"`
 	ChainValid    *bool        `json:"chain_valid,omitempty"`
 	ChainError    string       `json:"chain_error,omitempty"`
+	ChainErrKind  string       `json:"chain_error_kind,omitempty"`
+	UntrustedIss  string       `json:"untrusted_issuer,omitempty"`
+	NoSCT         bool         `json:"no_sct,omitempty"`
 	ChainExpiry   *chainExpiry `json:"chain_expiry_warning,omitempty"`
 	Chain         []chainCert  `json:"chain,omitempty"`
 }
@@ -682,6 +815,9 @@ func buildPayload(info *CertInfo, domain string, includeChain, includeFingerprin
 		out.ChainValid = &valid
 		if info.ChainErr != nil {
 			out.ChainError = info.ChainErr.Error()
+			out.ChainErrKind, _ = classifyChainErr(info)
+			out.UntrustedIss = untrustedIssuer(info)
+			out.NoSCT = !hasSCT(cert)
 		}
 	}
 	if early := earliestExpiringBefore(info.Chain); early != nil {

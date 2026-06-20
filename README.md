@@ -11,7 +11,8 @@ A small command-line tool to inspect and monitor SSL/TLS certificates — for on
 **What it checks**
 
 - Expiry and days remaining, with a `-threshold` warning that drives exit code `2`
-- Certificate chain validity (trust, hostname, validity period)
+- Certificate chain validity (trust, hostname, validity period) — on failure, the reason is classified (untrusted/unanchored root, incomplete chain, expired, hostname) and the issuer trail to the break is shown, so you see **where** trust ends (e.g. a private root impersonating a public CA) without reaching for `openssl`
+- Certificate Transparency: warns when a leaf carries **no embedded SCTs** and the chain is untrusted (a sign it is not from a genuine public CA)
 - Intermediate that expires **before** the leaf (weakest-link expiry)
 - Certificate not valid **yet** (`NotBefore` in the future)
 - Hostname coverage (does the cert actually cover the requested name, wildcards included)
@@ -267,6 +268,8 @@ ssl-watch -domain github.com -output json
 Field notes:
 
 - `chain_valid` / `chain_error` — omitted for file-loaded certificates and with `-insecure`.
+- `chain_error_kind` / `untrusted_issuer` — on a failed chain: the classified reason (`untrusted_root`, `unanchored`, `hostname_mismatch`, `expired`, …) and the issuer the chain could not be anchored to.
+- `no_sct` — `true` only when the leaf carries no embedded SCTs (Certificate Transparency).
 - `tls_version` / `cipher_suite` — present only for fetched certificates.
 - `chain` — the full chain array (`{subject, issuer, not_after, days_remaining}`), present only with `-chain`.
 - `fingerprint` / `spki_fingerprint` — the certificate and public-key SHA-256, present only with `-fingerprint` (`fingerprint` is also always present per address under `-all-ips`).

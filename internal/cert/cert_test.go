@@ -9,6 +9,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -403,6 +404,182 @@ func TestChainPEM(t *testing.T) {
 	single := ChainPEM(&CertInfo{Cert: leaf})
 	if got := strings.Count(string(single), "BEGIN CERTIFICATE"); got != 1 {
 		t.Errorf("expected 1 block for a single cert, got %d", got)
+	}
+}
+
+// issueChainCerts builds a real leaf ← intermediate ← root hierarchy (the leaf is
+// signed by the intermediate, the intermediate by the self-signed root).
+func issueChainCerts(t *testing.T) (leaf, inter, root *x509.Certificate) {
+	t.Helper()
+	mk := func(cn string, org string, parent *x509.Certificate, parentKey *rsa.PrivateKey, serial int64, isCA bool) (*x509.Certificate, *rsa.PrivateKey) {
+		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatalf("key: %v", err)
+		}
+		tmpl := x509.Certificate{
+			SerialNumber:          big.NewInt(serial),
+			Subject:               pkix.Name{CommonName: cn, Organization: []string{org}},
+			NotBefore:             time.Now().Add(-time.Hour),
+			NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+			IsCA:                  isCA,
+			BasicConstraintsValid: isCA,
+		}
+		if isCA {
+			tmpl.KeyUsage = x509.KeyUsageCertSign
+		} else {
+			tmpl.DNSNames = []string{cn}
+		}
+		signer, signerKey := parent, parentKey
+		if signer == nil { // self-signed root
+			signer, signerKey = &tmpl, key
+		}
+		der, err := x509.CreateCertificate(rand.Reader, &tmpl, signer, &key.PublicKey, signerKey)
+		if err != nil {
+			t.Fatalf("create %s: %v", cn, err)
+		}
+		c, err := x509.ParseCertificate(der)
+		if err != nil {
+			t.Fatalf("parse %s: %v", cn, err)
+		}
+		return c, key
+	}
+	root, rootKey := mk("Test Root", "TestOrg", nil, nil, 1, true)
+	inter, interKey := mk("Test Inter", "InterOrg", root, rootKey, 2, true)
+	leaf, _ = mk("leaf.example", "LeafOrg", inter, interKey, 3, false)
+	return leaf, inter, root
+}
+
+// verifyErr returns the (untrusted) verification error for a leaf with the given
+// intermediates, against the system roots — i.e. a real UnknownAuthorityError.
+func verifyErr(t *testing.T, leaf *x509.Certificate, inters ...*x509.Certificate) error {
+	t.Helper()
+	pool := x509.NewCertPool()
+	for _, c := range inters {
+		pool.AddCert(c)
+	}
+	_, err := leaf.Verify(x509.VerifyOptions{Intermediates: pool})
+	if err == nil {
+		t.Fatal("expected verification to fail against system roots")
+	}
+	return err
+}
+
+// TestHasSCT verifies SCT-extension detection.
+func TestHasSCT(t *testing.T) {
+	plain := genCert(t, "plain.example", time.Now().Add(90*24*time.Hour))
+	if hasSCT(plain) {
+		t.Error("a cert without the SCT extension should report no SCTs")
+	}
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+	tmpl := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "sct.example"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(90 * 24 * time.Hour),
+		ExtraExtensions: []pkix.Extension{{
+			Id:    asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 11129, 2, 4, 2},
+			Value: []byte{0x04, 0x00},
+		}},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	withSCT, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !hasSCT(withSCT) {
+		t.Error("a cert carrying the SCT extension should report SCTs present")
+	}
+}
+
+// TestChainBreak verifies the break point for an unanchored chain and a served
+// self-signed root.
+func TestChainBreak(t *testing.T) {
+	leaf, inter, root := issueChainCerts(t)
+
+	// leaf + inter served, root missing → break at inter, issuer = root, not self-signed.
+	brk, issuer, selfSigned, ok := chainBreak(&CertInfo{Cert: leaf, Chain: []*x509.Certificate{leaf, inter}})
+	if !ok || brk != inter || selfSigned {
+		t.Errorf("expected break at the intermediate (not self-signed), got brk=%v selfSigned=%v ok=%v", brk != nil, selfSigned, ok)
+	}
+	if !strings.Contains(issuer, "Test Root") {
+		t.Errorf("expected the missing issuer to name the root, got %q", issuer)
+	}
+
+	// A served self-signed root → selfSigned true.
+	_, _, selfSigned, ok = chainBreak(&CertInfo{Cert: root, Chain: []*x509.Certificate{root}})
+	if !ok || !selfSigned {
+		t.Errorf("expected a served self-signed root, got selfSigned=%v ok=%v", selfSigned, ok)
+	}
+}
+
+// TestClassifyChainErr verifies the kind for a real unanchored chain.
+func TestClassifyChainErr(t *testing.T) {
+	leaf, inter, _ := issueChainCerts(t)
+	info := &CertInfo{Cert: leaf, Chain: []*x509.Certificate{leaf, inter}, Verified: true, ChainErr: verifyErr(t, leaf, inter)}
+	kind, reason := classifyChainErr(info)
+	if kind != "unanchored" {
+		t.Errorf("expected kind 'unanchored', got %q", kind)
+	}
+	if reason == "" {
+		t.Error("expected a non-empty reason")
+	}
+}
+
+// TestPrint_UntrustedRoot verifies the trust diagnostics in text and JSON for an
+// untrusted chain whose leaf carries no SCTs.
+func TestPrint_UntrustedRoot(t *testing.T) {
+	leaf, inter, _ := issueChainCerts(t)
+	info := &CertInfo{Cert: leaf, Chain: []*x509.Certificate{leaf, inter}, Verified: true, ChainErr: verifyErr(t, leaf, inter)}
+	printer := &CertificatePrinterImpl{}
+
+	out := captureStdout(t, func() { printer.Print(info, PrintOptions{}) })
+	for _, want := range []string{"INVALID — not anchored to a trusted root", "Test Inter", "no embedded SCTs"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("text output missing %q:\n%s", want, out)
+		}
+	}
+
+	out = captureStdout(t, func() { printer.Print(info, PrintOptions{JSON: true}) })
+	var got struct {
+		ChainErrorKind  string `json:"chain_error_kind"`
+		UntrustedIssuer string `json:"untrusted_issuer"`
+		NoSCT           bool   `json:"no_sct"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	if got.ChainErrorKind != "unanchored" {
+		t.Errorf("expected chain_error_kind 'unanchored', got %q", got.ChainErrorKind)
+	}
+	if !strings.Contains(got.UntrustedIssuer, "Test Root") {
+		t.Errorf("expected untrusted_issuer to name the root, got %q", got.UntrustedIssuer)
+	}
+	if !got.NoSCT {
+		t.Error("expected no_sct true for a cert without SCTs")
+	}
+}
+
+// TestPrint_HealthyNoTrustNoise verifies a verified cert adds no trust-diagnostic noise.
+func TestPrint_HealthyNoTrustNoise(t *testing.T) {
+	cert := genCert(t, "healthy.example", time.Now().Add(90*24*time.Hour))
+	info := &CertInfo{Cert: cert, Chain: []*x509.Certificate{cert}, Verified: true, ChainErr: nil}
+
+	printer := &CertificatePrinterImpl{}
+	out := captureStdout(t, func() { printer.Print(info, PrintOptions{}) })
+	if !strings.Contains(out, "Chain: VALID") {
+		t.Errorf("expected Chain: VALID, got:\n%s", out)
+	}
+	for _, unwanted := range []string{"no embedded SCTs", "INVALID", "not anchored"} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("healthy cert should not print %q:\n%s", unwanted, out)
+		}
 	}
 }
 
