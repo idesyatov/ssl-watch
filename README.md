@@ -129,7 +129,7 @@ make build
 
 **Connection**
 
-- `-port <port>` — port to connect to (default `443`; with `-starttls` the protocol's default port is used unless overridden).
+- `-port <port>` — default port for targets that don't carry their own (a `host:port` target or URL overrides it); applies to bare hosts, handy for a whole `-domain-file` list on one non-standard port. Default `443`; with `-starttls` the protocol's default port is used unless overridden.
 - `-ipaddr <ipaddr>` — connect to a specific IP (only valid with a single domain).
 - `-servername <name>` — SNI and hostname to verify against, overriding the domain (e.g. to check a specific vhost's certificate on a host reached by `-ipaddr`).
 - `-starttls <proto>` — upgrade via STARTTLS before reading the certificate: `smtp`, `imap`, `pop3` or `ftp`.

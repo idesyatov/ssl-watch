@@ -146,7 +146,7 @@ func NewDefaultFlagParser() FlagParser {
 		domain:       fs.String("domain", "", "Domain(s) to check, comma-separated for several; each may carry a port (host:port) or be a URL (e.g. a.com,b.com:8443)"),
 		domainFile:   fs.String("domain-file", "", "Path to a file with one domain per line (\"-\" reads stdin)"),
 		certFile:     fs.String("certfile", "", "Path to the local certificate file"),
-		port:         fs.String("port", "443", "Port to connect to (optional)"),
+		port:         fs.String("port", "443", "Default port for targets that don't carry their own (host:port overrides)"),
 		ipaddr:       fs.String("ipaddr", "", "IP address to connect to (optional)"),
 		serverName:   fs.String("servername", "", "SNI/hostname to verify against, overriding the domain (e.g. with -ipaddr)"),
 		caFile:       fs.String("cafile", "", "PEM bundle of trusted roots to verify against, replacing the system roots"),
