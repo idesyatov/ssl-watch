@@ -1,11 +1,14 @@
 package cert
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // PromSample is the result for one domain in a Prometheus run: Info is nil when
@@ -90,6 +93,58 @@ func WritePrometheus(w io.Writer, samples []PromSample, pin string) {
 			}
 		}
 	}
+}
+
+// csvHeader is the column order for CSV output. "domain" and "error" are always
+// present; for a domain that failed to be retrieved the certificate columns are
+// empty and "error" carries the reason.
+var csvHeader = []string{
+	"domain", "common_name", "issuer",
+	"not_before", "not_after", "days_remaining", "min_days_remaining",
+	"chain_valid", "error",
+}
+
+// WriteCSV renders the samples as RFC 4180 CSV with a header row, one row per
+// domain (machine-readable timestamps in RFC 3339, UTC). Quoting is handled by
+// encoding/csv, so issuer DNs and other fields containing commas are safe. It
+// shares the per-domain PromSample type with the prometheus output.
+func WriteCSV(w io.Writer, samples []PromSample) error {
+	cw := csv.NewWriter(w)
+	if err := cw.Write(csvHeader); err != nil {
+		return err
+	}
+	for _, s := range samples {
+		var row []string
+		if s.Info == nil {
+			errMsg := ""
+			if s.Err != nil {
+				errMsg = s.Err.Error()
+			}
+			row = []string{s.Domain, "", "", "", "", "", "", "", errMsg}
+		} else {
+			c := s.Info.Cert
+			chainValid := ""
+			if s.Info.Verified {
+				chainValid = strconv.FormatBool(s.Info.ChainErr == nil)
+			}
+			row = []string{
+				s.Domain,
+				c.Subject.CommonName,
+				c.Issuer.String(),
+				c.NotBefore.UTC().Format(time.RFC3339),
+				c.NotAfter.UTC().Format(time.RFC3339),
+				strconv.Itoa(DaysUntilExpiry(c)),
+				strconv.Itoa(s.Info.MinDaysUntilExpiry()),
+				chainValid,
+				"",
+			}
+		}
+		if err := cw.Write(row); err != nil {
+			return err
+		}
+	}
+	cw.Flush()
+	return cw.Error()
 }
 
 // IPResult is the certificate (or error) obtained from one resolved address.

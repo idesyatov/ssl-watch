@@ -69,6 +69,9 @@ func TestValidate(t *testing.T) {
 		{"pem + json", flags.Config{Output: "json", Timeout: 10, Concurrency: 1, Pem: true}, one, true},
 		{"pem + export", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, Pem: true, Export: "f"}, one, true},
 		{"prometheus + all-ips", flags.Config{Output: "prometheus", Timeout: 10, Concurrency: 1, AllIPs: true}, one, true},
+		{"csv ok", flags.Config{Output: "csv", Timeout: 10, Concurrency: 1}, two, false},
+		{"csv + all-ips", flags.Config{Output: "csv", Timeout: 10, Concurrency: 1, AllIPs: true}, one, true},
+		{"csv + certfile", flags.Config{Output: "csv", Timeout: 10, Concurrency: 1, CertFile: "c.pem"}, nil, true},
 		{"bad starttls", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, StartTLS: "gopher"}, one, true},
 		{"good starttls", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, StartTLS: "smtp"}, one, false},
 	}

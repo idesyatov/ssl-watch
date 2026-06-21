@@ -141,7 +141,7 @@ make build
 
 **Output**
 
-- `-output <text|json|prometheus>` — output format (default `text`). `prometheus` emits metrics in the exposition format for a single domain or a batch (not with `-all-ips`/`-certfile`).
+- `-output <text|json|prometheus|csv>` — output format (default `text`). `prometheus` emits metrics in the exposition format; `csv` emits one row per domain (header + RFC 3339 timestamps, quoted per RFC 4180) for a single domain or a batch. Neither `prometheus` nor `csv` combines with `-all-ips`/`-certfile`.
 - `-short` — print only the number of days remaining. With several domains the count is prefixed with the domain (`domain<TAB>days`) so it stays greppable.
 - `-chain` — print every certificate in the chain (subject, issuer, expiry).
 - `-fingerprint` — print the certificate and public-key (SPKI) SHA-256 fingerprints.
@@ -188,6 +188,9 @@ ssl-watch -domain example.com -threshold 30 -short
 
 # Machine-readable JSON
 ssl-watch -domain example.com -output json
+
+# CSV (one row per domain, for spreadsheets/reports)
+ssl-watch -domain a.com,b.com,c.com -output csv
 
 # Shorter connection timeout (3 seconds)
 ssl-watch -domain example.com -timeout 3
@@ -329,6 +332,18 @@ ssl_cert_chain_valid{domain="example.com"} 1
 ```bash
 ssl-watch -domain a.com,b.com -output prometheus > /var/lib/node_exporter/ssl_watch.prom
 ```
+
+### CSV output (`-output csv`)
+
+One row per domain (header first), for spreadsheets or quick reports. Timestamps are RFC 3339 (UTC); fields are quoted per RFC 4180, so issuer DNs with commas are safe. A domain that failed to be retrieved gets an empty certificate row with the reason in the `error` column.
+
+```text
+domain,common_name,issuer,not_before,not_after,days_remaining,min_days_remaining,chain_valid,error
+github.com,github.com,"CN=Sectigo Public Server Authentication CA DV E36,O=Sectigo Limited,C=GB",2026-05-05T00:00:00Z,2026-08-02T23:59:59Z,42,42,true,
+down.example,,,,,,,,failed to connect to down.example:443: ...
+```
+
+Like `prometheus`, it works for a single domain or a batch (with `-concurrency`), but not with `-all-ips`/`-certfile`. Exit code follows the batch rule: `1` if any domain failed, otherwise `2` if any expires within `-threshold`, otherwise `0`.
 
 </details>
 

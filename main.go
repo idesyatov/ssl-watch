@@ -161,6 +161,11 @@ func main() {
 		os.Exit(runPrometheus(fetcher, targets, cfg, fetchOpts, pinHex))
 	}
 
+	// CSV: fetch every target and emit one row each.
+	if cfg.Output == "csv" {
+		os.Exit(runCSV(fetcher, targets, cfg, fetchOpts))
+	}
+
 	// -all-ips: resolve the domain and check the certificate on every address.
 	if cfg.AllIPs {
 		os.Exit(runAllIPs(fetcher, targets[0], cfg, opts, fetchOpts))
@@ -207,8 +212,8 @@ func validate(cfg flags.Config, targets []target) error {
 	if err := validation.NewDefaultInputValidator().Validate(domainArg, cfg.CertFile); err != nil {
 		return err
 	}
-	if cfg.Output != "text" && cfg.Output != "json" && cfg.Output != "prometheus" {
-		return fmt.Errorf("invalid -output %q (expected \"text\", \"json\" or \"prometheus\")", cfg.Output)
+	if cfg.Output != "text" && cfg.Output != "json" && cfg.Output != "prometheus" && cfg.Output != "csv" {
+		return fmt.Errorf("invalid -output %q (expected \"text\", \"json\", \"prometheus\" or \"csv\")", cfg.Output)
 	}
 	if cfg.Timeout <= 0 {
 		return fmt.Errorf("invalid -timeout %d (expected a positive number of seconds)", cfg.Timeout)
@@ -275,12 +280,12 @@ func validate(cfg flags.Config, targets []target) error {
 			return errors.New("-pem/-export cannot be combined with -expect-issuer/-strict")
 		}
 	}
-	if cfg.Output == "prometheus" {
+	if cfg.Output == "prometheus" || cfg.Output == "csv" {
 		switch {
 		case cfg.AllIPs:
-			return errors.New("-output prometheus cannot be combined with -all-ips")
+			return fmt.Errorf("-output %s cannot be combined with -all-ips", cfg.Output)
 		case cfg.CertFile != "":
-			return errors.New("-output prometheus cannot be combined with -certfile")
+			return fmt.Errorf("-output %s cannot be combined with -certfile", cfg.Output)
 		}
 	}
 	if cfg.StartTLS != "" {
@@ -316,9 +321,40 @@ func runExport(info *cert.CertInfo, cfg flags.Config) int {
 // domain failed to be retrieved, otherwise 2 if any certificate expires within
 // -threshold, otherwise 0.
 func runPrometheus(fetcher cert.CertificateFetcher, targets []target, cfg flags.Config, fetchOpts cert.FetchOptions, pinHex string) int {
-	samples := make([]cert.PromSample, 0, len(targets))
-	hadError := false
-	expiring := false
+	samples, hadError, expiring := collectSamples(fetcher, targets, cfg, fetchOpts)
+	cert.WritePrometheus(os.Stdout, samples, pinHex)
+	switch {
+	case hadError:
+		return exitError
+	case expiring:
+		return exitSoft
+	}
+	return exitOK
+}
+
+// runCSV fetches every target and writes the results as CSV to stdout. The exit
+// code mirrors the other batch report formats: 1 if any target failed, otherwise
+// 2 if any certificate expires within -threshold, otherwise 0.
+func runCSV(fetcher cert.CertificateFetcher, targets []target, cfg flags.Config, fetchOpts cert.FetchOptions) int {
+	samples, hadError, expiring := collectSamples(fetcher, targets, cfg, fetchOpts)
+	if err := cert.WriteCSV(os.Stdout, samples); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to write CSV: %v\n", err)
+		return exitError
+	}
+	switch {
+	case hadError:
+		return exitError
+	case expiring:
+		return exitSoft
+	}
+	return exitOK
+}
+
+// collectSamples fetches every target (respecting -concurrency, order preserved)
+// and returns the per-target samples plus whether any failed to be retrieved or
+// expires within -threshold. Shared by the prometheus and csv report formats.
+func collectSamples(fetcher cert.CertificateFetcher, targets []target, cfg flags.Config, fetchOpts cert.FetchOptions) (samples []cert.PromSample, hadError, expiring bool) {
+	samples = make([]cert.PromSample, 0, len(targets))
 	for _, r := range fetchAll(fetcher, targets, cfg.IPAddr, fetchOpts, cfg.Concurrency) {
 		label := r.target.label()
 		if r.err != nil {
@@ -331,14 +367,7 @@ func runPrometheus(fetcher cert.CertificateFetcher, targets []target, cfg flags.
 			expiring = true
 		}
 	}
-	cert.WritePrometheus(os.Stdout, samples, pinHex)
-	switch {
-	case hadError:
-		return exitError
-	case expiring:
-		return exitSoft
-	}
-	return exitOK
+	return samples, hadError, expiring
 }
 
 // printSingle prints one certificate and exits with code 2 when it expires

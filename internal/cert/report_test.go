@@ -2,6 +2,7 @@ package cert
 
 import (
 	"crypto/x509"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -48,6 +49,48 @@ func TestWritePrometheus(t *testing.T) {
 	WritePrometheus(&buf, samples[:1], Fingerprint(ok))
 	if pinOut := buf.String(); !strings.Contains(pinOut, `ssl_cert_pin_match{domain="ok.example"} 1`) {
 		t.Errorf("expected pin_match 1 with a matching pin:\n%s", pinOut)
+	}
+}
+
+// TestWriteCSV verifies the header, one row per domain, an empty cert row with
+// the error filled for a failed domain, and that a comma-bearing issuer DN is
+// quoted (parsed back cleanly by encoding/csv).
+func TestWriteCSV(t *testing.T) {
+	ok := genCert(t, "ok.example", time.Now().Add(90*24*time.Hour))
+	samples := []PromSample{
+		{Domain: "ok.example", Info: &CertInfo{Cert: ok, Chain: []*x509.Certificate{ok}, Verified: true}},
+		{Domain: "bad.example:8443", Err: errors.New("connection refused")},
+	}
+
+	var buf strings.Builder
+	if err := WriteCSV(&buf, samples); err != nil {
+		t.Fatalf("WriteCSV: %v", err)
+	}
+
+	rows, err := csv.NewReader(strings.NewReader(buf.String())).ReadAll()
+	if err != nil {
+		t.Fatalf("output is not valid CSV: %v\n%s", err, buf.String())
+	}
+	if len(rows) != 3 {
+		t.Fatalf("expected header + 2 rows, got %d:\n%s", len(rows), buf.String())
+	}
+	if rows[0][0] != "domain" || rows[0][len(rows[0])-1] != "error" {
+		t.Errorf("unexpected header: %v", rows[0])
+	}
+	if len(rows[1]) != len(csvHeader) {
+		t.Fatalf("data row has %d columns, want %d", len(rows[1]), len(csvHeader))
+	}
+	if rows[1][0] != "ok.example" || rows[1][7] != "true" {
+		t.Errorf("ok row: domain/chain_valid wrong: %v", rows[1])
+	}
+	// The issuer DN (self-signed → contains the subject CN with commas in a real
+	// DN) round-trips through csv quoting; here just confirm the field is intact.
+	if !strings.Contains(rows[1][2], "ok.example") {
+		t.Errorf("issuer column should carry the DN, got %q", rows[1][2])
+	}
+	// Failed domain: empty cert columns, error filled, label keeps its port.
+	if rows[2][0] != "bad.example:8443" || rows[2][1] != "" || rows[2][8] != "connection refused" {
+		t.Errorf("error row wrong: %v", rows[2])
 	}
 }
 
