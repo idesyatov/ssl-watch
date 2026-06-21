@@ -36,7 +36,7 @@ func (p *CertificatePrinterImpl) Print(info *CertInfo, opts PrintOptions) {
 func (p *CertificatePrinterImpl) printText(info *CertInfo, days int, opts PrintOptions) {
 	cert := info.Cert
 
-	fmt.Printf("Certificate for %s\n", cert.Subject.CommonName)
+	fmt.Printf("Certificate for %s\n", headerName(cert))
 	fmt.Printf("Subject: %s\n", cert.Subject)
 	fmt.Printf("Issuer: %s\n", cert.Issuer)
 	if len(cert.DNSNames) > 0 {
@@ -61,10 +61,14 @@ func (p *CertificatePrinterImpl) printText(info *CertInfo, days int, opts PrintO
 		fmt.Printf("SHA-256 (pubkey): %s\n", SPKIFingerprint(cert))
 	}
 
-	fmt.Printf("Valid from: %s\n", cert.NotBefore)
-	fmt.Printf("Expires on: %s\n", cert.NotAfter)
+	fmt.Printf("Valid from: %s\n", cert.NotBefore.Format(dateFormat))
+	fmt.Printf("Expires on: %s\n", cert.NotAfter.Format(dateFormat))
 
-	fmt.Printf("Days remaining: %s\n", colorizeDays(days, opts.Threshold, opts.Color))
+	daysStr := colorizeDays(days, opts.Threshold, opts.Color)
+	if days < 0 {
+		daysStr += maybeColor(" (expired)", colorRed, opts.Color)
+	}
+	fmt.Printf("Days remaining: %s\n", daysStr)
 
 	if !info.FromFile {
 		fmt.Printf("Used IP address: %s\n", info.UsedIP)
@@ -111,7 +115,7 @@ func (p *CertificatePrinterImpl) printText(info *CertInfo, days int, opts PrintO
 	if notYetValid(cert) {
 		inDays := int(time.Until(cert.NotBefore).Hours() / 24)
 		msg := fmt.Sprintf("WARNING: certificate is not valid yet — becomes valid in %d days (%s)",
-			inDays, cert.NotBefore.Format("2006-01-02"))
+			inDays, cert.NotBefore.Format(dateFormat))
 		fmt.Println(maybeColor(msg, colorRed, opts.Color))
 	}
 	if nameMismatch(info) {
@@ -138,7 +142,7 @@ func printChainText(info *CertInfo) {
 	fmt.Printf("Certificate chain (%d):\n", len(chain))
 	for i, c := range chain {
 		fmt.Printf("  [%d] %s (issued by %s) - expires %s, %d days\n",
-			i, subjectName(c), issuerName(c), c.NotAfter.Format("2006-01-02"), DaysUntilExpiry(c))
+			i, subjectName(c), issuerName(c), c.NotAfter.Format(dateFormat), DaysUntilExpiry(c))
 	}
 }
 
@@ -285,6 +289,11 @@ func (p *CertificatePrinterImpl) printJSON(info *CertInfo, opts PrintOptions) {
 	}
 	fmt.Println(string(b))
 }
+
+// dateFormat is the single date layout used across all text output (leaf, chain,
+// all-ips, warnings). Includes time and zone because the time matters near a
+// threshold boundary; JSON keeps RFC 3339.
+const dateFormat = "2006-01-02 15:04 MST"
 
 // ANSI color codes used for the human-readable output.
 const (

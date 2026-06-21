@@ -67,6 +67,51 @@ func genCert(t *testing.T, cn string, notAfter time.Time) *x509.Certificate {
 	return c
 }
 
+// TestHeaderName verifies the "Certificate for ..." name falls back from an empty
+// CommonName to the first SAN, then to the full subject DN.
+func TestHeaderName(t *testing.T) {
+	cn := &x509.Certificate{Subject: pkix.Name{CommonName: "cn.example"}, DNSNames: []string{"san.example"}}
+	if got := headerName(cn); got != "cn.example" {
+		t.Errorf("with CN: expected %q, got %q", "cn.example", got)
+	}
+
+	san := &x509.Certificate{DNSNames: []string{"san.example", "alt.example"}}
+	if got := headerName(san); got != "san.example" {
+		t.Errorf("no CN, with SAN: expected %q, got %q", "san.example", got)
+	}
+
+	dn := &x509.Certificate{Subject: pkix.Name{Organization: []string{"Acme"}}}
+	if got := headerName(dn); got != dn.Subject.String() {
+		t.Errorf("no CN, no SAN: expected DN %q, got %q", dn.Subject.String(), got)
+	}
+}
+
+// TestPrint_ExpiredMarker verifies an expired leaf gets a textual "(expired)"
+// marker that survives without color, in addition to the negative day count.
+func TestPrint_ExpiredMarker(t *testing.T) {
+	cert := genCert(t, "old.example", time.Now().Add(-3*24*time.Hour))
+	info := &CertInfo{Cert: cert}
+
+	out := captureStdout(t, func() { (&CertificatePrinterImpl{}).Print(info, PrintOptions{}) })
+
+	if !strings.Contains(out, "(expired)") {
+		t.Errorf("expected an (expired) marker, got:\n%s", out)
+	}
+}
+
+// TestPrint_DateFormat verifies the leaf validity dates use the unified layout.
+func TestPrint_DateFormat(t *testing.T) {
+	cert := genCert(t, "fmt.example", time.Now().Add(90*24*time.Hour))
+	info := &CertInfo{Cert: cert}
+
+	out := captureStdout(t, func() { (&CertificatePrinterImpl{}).Print(info, PrintOptions{}) })
+
+	want := "Expires on: " + cert.NotAfter.Format(dateFormat)
+	if !strings.Contains(out, want) {
+		t.Errorf("expected output to contain %q, got:\n%s", want, out)
+	}
+}
+
 // TestFingerprint verifies the SHA-256 fingerprint is stable and distinguishes
 // different certificates.
 func TestFingerprint(t *testing.T) {

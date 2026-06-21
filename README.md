@@ -6,12 +6,18 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/idesyatov/ssl-watch)](https://goreportcard.com/report/github.com/idesyatov/ssl-watch)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A small command-line tool to inspect and monitor SSL/TLS certificates — for one domain, many at once, or a local certificate file. Built for cron/CI: a `-threshold` flag drives exit codes, and `-output json` makes the result machine-readable.
+A small, dependency-free command-line tool — a single static Go binary — to inspect and monitor SSL/TLS certificates, for one domain, many at once, or a local certificate file. Built for cron/CI: a `-threshold` flag drives exit codes, and `-output json` (or `-output prometheus`) makes the result machine-readable.
+
+**Why not just `openssl s_client`?** Three things it does that a raw handshake dump doesn't:
+
+- **Shows *where* trust breaks.** On a failed chain it classifies the reason (untrusted/unanchored root, incomplete chain, expired, hostname mismatch) and prints the issuer trail to the break — so you can spot a private root impersonating a public CA at a glance, without piecing it together by hand.
+- **Checks every IP of a domain** (`-all-ips`) — catches one load-balancer node serving a stale or different certificate.
+- **Pins the certificate** (`-pin sha256:…`) — verifies the served cert or public-key fingerprint and exits `3` on mismatch (MITM, a swapped CA, an unexpected rotation).
 
 **What it checks**
 
 - Expiry and days remaining, with a `-threshold` warning that drives exit code `2`
-- Certificate chain validity (trust, hostname, validity period) — on failure, the reason is classified (untrusted/unanchored root, incomplete chain, expired, hostname) and the issuer trail to the break is shown, so you see **where** trust ends (e.g. a private root impersonating a public CA) without reaching for `openssl`
+- Certificate chain validity — trust, hostname, validity period (on failure, the classified reason and issuer trail shown above)
 - Certificate Transparency: warns when a leaf carries **no embedded SCTs** and the chain is untrusted (a sign it is not from a genuine public CA)
 - Intermediate that expires **before** the leaf (weakest-link expiry)
 - Certificate not valid **yet** (`NotBefore` in the future)
@@ -19,8 +25,7 @@ A small command-line tool to inspect and monitor SSL/TLS certificates — for on
 - Weak crypto (SHA-1 signature, RSA < 2048) and non-server-auth key usage
 - Public key type/size and the negotiated TLS version & cipher
 - Certificates behind **STARTTLS** (SMTP/IMAP/POP3/FTP)
-- The cert on **every IP** of a domain (`-all-ips`) — catch a load balancer serving a stale/different cert
-- **Pinning** (`-pin sha256:…`) — verify the served cert/public-key fingerprint, exit `3` on mismatch (catches MITM, a swapped CA, or an unexpected rotation)
+- Mutual TLS with a client certificate (`-client-cert`/`-client-key`), and chain verification against a custom CA bundle (`-cafile`) instead of the system roots
 
 ## Quick start
 
@@ -133,7 +138,7 @@ make build
 **Output**
 
 - `-output <text|json|prometheus>` — output format (default `text`). `prometheus` emits metrics in the exposition format for a single domain or a batch (not with `-all-ips`/`-certfile`).
-- `-short` — print only the number of days remaining.
+- `-short` — print only the number of days remaining. With several domains the count is prefixed with the domain (`domain<TAB>days`) so it stays greppable.
 - `-chain` — print every certificate in the chain (subject, issuer, expiry).
 - `-fingerprint` — print the certificate and public-key (SPKI) SHA-256 fingerprints.
 - `-pem` — print the served certificate chain as PEM to stdout (single target; replaces the normal report).
@@ -150,7 +155,7 @@ make build
 
 In text mode, when writing to an interactive terminal, the days-remaining value and chain status are colorized (red/yellow/green). Color is disabled automatically when output is piped/redirected or when `NO_COLOR` is set.
 
-Several domains can be checked in one run via comma-separated `-domain` or `-domain-file`. In text mode each is printed as its own block prefixed with `==> <domain>`; in JSON mode the output becomes an array (one object per domain, each tagged with `domain`, and an `{ "domain", "error" }` entry for any that could not be retrieved).
+Several domains can be checked in one run via comma-separated `-domain` or `-domain-file`. In text mode each is printed as its own block prefixed with `==> <domain>` (or, with `-short`, one `domain<TAB>days` line each); in JSON mode the output becomes an array (one object per domain, each tagged with `domain`, and an `{ "domain", "error" }` entry for any that could not be retrieved).
 
 </details>
 
@@ -225,8 +230,8 @@ SANs: github.com, www.github.com
 Serial: E7:CE:CC:3B:13:FB:3B:7B:8A:46:EA:8C:D0:AE:B7:1C
 Signature: ECDSA-SHA256
 Public key: ECDSA P-256
-Valid from: 2026-05-05 00:00:00 +0000 UTC
-Expires on: 2026-08-02 23:59:59 +0000 UTC
+Valid from: 2026-05-05 00:00 UTC
+Expires on: 2026-08-02 23:59 UTC
 Days remaining: 45
 Used IP address: 140.82.121.4
 TLS: TLS 1.3 (TLS_AES_128_GCM_SHA256)
@@ -237,7 +242,7 @@ Problems are surfaced as extra `WARNING:` lines and are **only printed when they
 so a healthy certificate stays clean. Examples:
 
 ```text
-WARNING: certificate is not valid yet — becomes valid in 3 days (2026-06-22)
+WARNING: certificate is not valid yet — becomes valid in 3 days (2026-06-22 00:00 UTC)
 WARNING: certificate does not cover "api.shop.example.com"
 WARNING: intermediate "R3" expires in 12 days, before the leaf (89 days)
 WARNING: certificate is not intended for server authentication
@@ -289,9 +294,9 @@ Resolves every A/AAAA record of the domain and checks the certificate on each (s
 
 ```text
 example.com — checking 3 address(es)
-  203.0.113.10                             e3b0c44298fc1c14  89 days  expires 2026-08-02  VALID
-  203.0.113.11                             e3b0c44298fc1c14  89 days  expires 2026-08-02  VALID
-  203.0.113.12                             9f86d081884c7d65  8 days   expires 2026-06-25  VALID
+  203.0.113.10                             e3b0c44298fc1c14  89 days  expires 2026-08-02 23:59 UTC  VALID
+  203.0.113.11                             e3b0c44298fc1c14  89 days  expires 2026-08-02 23:59 UTC  VALID
+  203.0.113.12                             9f86d081884c7d65  8 days   expires 2026-06-25 23:59 UTC  VALID
 WARNING: certificates differ across addresses
 ```
 

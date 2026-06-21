@@ -240,3 +240,30 @@ func TestRunBatch_Text(t *testing.T) {
 		}
 	}
 }
+
+// TestRunBatch_Short verifies that multi-domain short mode prefixes each days
+// count with its domain (domain<TAB>days), so the numbers stay attributable.
+func TestRunBatch_Short(t *testing.T) {
+	fetcher := &fakeFetcher{
+		infos: map[string]*cert.CertInfo{
+			"a.example": leafInfo("a.example", 90),
+			"b.example": leafInfo("b.example", 5),
+		},
+	}
+	domains := []string{"a.example", "b.example"}
+	cfg := flags.Config{Output: "text", Short: true}
+	opts := cert.PrintOptions{Short: true}
+
+	out := captureStdout(t, func() {
+		runBatch(fetcher, &cert.CertificatePrinterImpl{}, domains, cfg, opts, cert.FetchOptions{Timeout: time.Second})
+	})
+
+	for _, want := range []string{"a.example\t90", "b.example\t5"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected output to contain %q, got:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "==>") || strings.Contains(out, "Certificate for") {
+		t.Errorf("short output should not contain full details, got:\n%s", out)
+	}
+}

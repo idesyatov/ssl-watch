@@ -44,6 +44,19 @@ func subjectName(c *x509.Certificate) string {
 	return c.Subject.String()
 }
 
+// headerName picks the most meaningful name for the "Certificate for ..." header:
+// the subject CommonName, falling back to the first SAN (modern certs often leave
+// CN empty), then to the full subject DN.
+func headerName(c *x509.Certificate) string {
+	if c.Subject.CommonName != "" {
+		return c.Subject.CommonName
+	}
+	if len(c.DNSNames) > 0 {
+		return c.DNSNames[0]
+	}
+	return c.Subject.String()
+}
+
 // issuerName returns the issuer's common name, falling back to the full issuer DN.
 func issuerName(c *x509.Certificate) string {
 	if c.Issuer.CommonName != "" {

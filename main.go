@@ -372,13 +372,16 @@ func runBatch(fetcher cert.CertificateFetcher, printer cert.CertificatePrinter, 
 
 		if opts.JSON {
 			entries = append(entries, cert.Payload(info, d, opts.Chain, opts.Fingerprint))
+		} else if cfg.Short {
+			// Multi-domain short mode: prefix each days count with its domain so
+			// the numbers stay attributable and greppable (domain<TAB>days).
+			fmt.Printf("%s\t", d)
+			printer.Print(info, opts)
 		} else {
-			if printedText && !cfg.Short {
+			if printedText {
 				fmt.Println()
 			}
-			if !cfg.Short {
-				fmt.Printf("==> %s\n", d)
-			}
+			fmt.Printf("==> %s\n", d)
 			printer.Print(info, opts)
 			printedText = true
 		}

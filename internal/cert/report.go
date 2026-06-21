@@ -198,7 +198,7 @@ func printAllIPsText(domain string, results []IPResult, opts PrintOptions) {
 			}
 			fmt.Printf("  %-39s  %s  %s days  expires %s  %s%s\n",
 				r.IP, Fingerprint(c)[:16], colorizeDays(DaysUntilExpiry(c), opts.Threshold, opts.Color),
-				c.NotAfter.Format("2006-01-02"), chain, pin)
+				c.NotAfter.Format(dateFormat), chain, pin)
 		}
 	}
 
