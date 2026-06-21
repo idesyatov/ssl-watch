@@ -11,10 +11,13 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -56,6 +59,19 @@ var starttlsPorts = map[string]string{
 	"ftp":  "21",
 }
 
+// effectiveDefaultPort is the port used for targets that do not carry their own:
+// the -port value, or the STARTTLS protocol's standard port when -starttls is set
+// and -port was left at its default. An unknown protocol is left for validate to
+// reject, so it does not substitute here.
+func effectiveDefaultPort(cfg flags.Config) string {
+	if cfg.Port == defaultPort && cfg.StartTLS != "" {
+		if p, ok := starttlsPorts[cfg.StartTLS]; ok {
+			return p
+		}
+	}
+	return cfg.Port
+}
+
 func main() {
 	// Create a new flag parser to handle command-line arguments
 	parser := flags.NewDefaultFlagParser()
@@ -69,8 +85,10 @@ func main() {
 		return
 	}
 
-	// Resolve the list of domains from -domain (comma-separated) and -domain-file.
-	domains, err := resolveDomains(cfg)
+	// Resolve the list of targets from -domain (comma-separated) and -domain-file.
+	// Each token may carry its own port (host:port or a URL); bare hosts use the
+	// effective default port (the STARTTLS protocol's port when applicable).
+	targets, err := resolveTargets(cfg, effectiveDefaultPort(cfg))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(exitError)
@@ -78,7 +96,7 @@ func main() {
 
 	// Reject unsupported flag combinations up front. validate is pure (no I/O,
 	// no exit) so the guard logic is unit-testable; main owns the reporting.
-	if err := validate(cfg, domains); err != nil {
+	if err := validate(cfg, targets); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
 		parser.Usage()
 		os.Exit(exitError)
@@ -94,12 +112,6 @@ func main() {
 			parser.Usage()
 			os.Exit(exitError)
 		}
-	}
-
-	// With -starttls, substitute the protocol's default port when the port was
-	// left at its default (validate has confirmed the protocol is known).
-	if cfg.StartTLS != "" && cfg.Port == defaultPort {
-		cfg.Port = starttlsPorts[cfg.StartTLS]
 	}
 
 	// Create instances of the certificate fetcher, loader, and printer
@@ -144,14 +156,14 @@ func main() {
 		fetchOpts.ClientCert = clientCert
 	}
 
-	// Prometheus exposition: fetch every domain and emit one metric set each.
+	// Prometheus exposition: fetch every target and emit one metric set each.
 	if cfg.Output == "prometheus" {
-		os.Exit(runPrometheus(fetcher, domains, cfg, fetchOpts, pinHex))
+		os.Exit(runPrometheus(fetcher, targets, cfg, fetchOpts, pinHex))
 	}
 
 	// -all-ips: resolve the domain and check the certificate on every address.
 	if cfg.AllIPs {
-		os.Exit(runAllIPs(fetcher, domains[0], cfg, opts, fetchOpts))
+		os.Exit(runAllIPs(fetcher, targets[0], cfg, opts, fetchOpts))
 	}
 
 	// Single target — a certificate file or exactly one domain — keeps the
@@ -167,8 +179,9 @@ func main() {
 		printSingle(printer, info, cfg, opts)
 		return
 	}
-	if len(domains) == 1 {
-		info, err := fetcher.Fetch(domains[0], cfg.Port, cfg.IPAddr, fetchOpts)
+	if len(targets) == 1 {
+		t := targets[0]
+		info, err := fetcher.Fetch(t.host, t.port, cfg.IPAddr, fetchOpts)
 		if err != nil {
 			log.Fatalf("Error retrieving certificate: %v", err)
 		}
@@ -179,15 +192,19 @@ func main() {
 		return
 	}
 
-	// Multiple domains — mass check with aggregated output and exit code.
-	os.Exit(runBatch(fetcher, printer, domains, cfg, opts, fetchOpts))
+	// Multiple targets — mass check with aggregated output and exit code.
+	os.Exit(runBatch(fetcher, printer, targets, cfg, opts, fetchOpts))
 }
 
 // validate reports the first unsupported flag combination in cfg, or nil. It is
 // pure — no I/O and no process exit — so every guard is unit-testable.
-func validate(cfg flags.Config, domains []string) error {
+func validate(cfg flags.Config, targets []target) error {
 	// At least one target (a domain or a certificate file) must be specified.
-	if err := validation.NewDefaultInputValidator().Validate(strings.Join(domains, ","), cfg.CertFile); err != nil {
+	domainArg := ""
+	if len(targets) > 0 {
+		domainArg = targets[0].host
+	}
+	if err := validation.NewDefaultInputValidator().Validate(domainArg, cfg.CertFile); err != nil {
 		return err
 	}
 	if cfg.Output != "text" && cfg.Output != "json" && cfg.Output != "prometheus" {
@@ -196,7 +213,10 @@ func validate(cfg flags.Config, domains []string) error {
 	if cfg.Timeout <= 0 {
 		return fmt.Errorf("invalid -timeout %d (expected a positive number of seconds)", cfg.Timeout)
 	}
-	if cfg.IPAddr != "" && len(domains) > 1 {
+	if cfg.Concurrency < 1 {
+		return fmt.Errorf("invalid -concurrency %d (expected a positive number)", cfg.Concurrency)
+	}
+	if cfg.IPAddr != "" && len(targets) > 1 {
 		return errors.New("-ipaddr cannot be combined with multiple domains")
 	}
 	if cfg.AllIPs {
@@ -209,7 +229,7 @@ func validate(cfg flags.Config, domains []string) error {
 			return errors.New("-all-ips cannot be combined with -short")
 		case cfg.ExpectIssuer != "" || cfg.Strict:
 			return errors.New("-all-ips cannot be combined with -expect-issuer/-strict")
-		case len(domains) != 1:
+		case len(targets) != 1:
 			return errors.New("-all-ips requires exactly one domain")
 		}
 	}
@@ -231,10 +251,10 @@ func validate(cfg flags.Config, domains []string) error {
 	if (cfg.ClientCert != "" || cfg.ClientKey != "") && cfg.CertFile != "" {
 		return errors.New("-client-cert/-client-key cannot be combined with -certfile")
 	}
-	if cfg.ServerName != "" && len(domains) > 1 {
+	if cfg.ServerName != "" && len(targets) > 1 {
 		return errors.New("-servername cannot be combined with multiple domains")
 	}
-	if cfg.Pin != "" && len(domains) > 1 {
+	if cfg.Pin != "" && len(targets) > 1 {
 		return errors.New("-pin cannot be combined with multiple domains")
 	}
 	if cfg.Pem || cfg.Export != "" {
@@ -245,7 +265,7 @@ func validate(cfg flags.Config, domains []string) error {
 			return fmt.Errorf("-pem/-export cannot be combined with -output %s", cfg.Output)
 		case cfg.AllIPs:
 			return errors.New("-pem/-export cannot be combined with -all-ips")
-		case len(domains) > 1:
+		case len(targets) > 1:
 			return errors.New("-pem/-export require a single target")
 		case cfg.Pin != "":
 			return errors.New("-pem/-export cannot be combined with -pin")
@@ -295,19 +315,19 @@ func runExport(info *cert.CertInfo, cfg flags.Config) int {
 // exposition format to stdout. It returns the aggregated exit code: 1 if any
 // domain failed to be retrieved, otherwise 2 if any certificate expires within
 // -threshold, otherwise 0.
-func runPrometheus(fetcher cert.CertificateFetcher, domains []string, cfg flags.Config, fetchOpts cert.FetchOptions, pinHex string) int {
-	samples := make([]cert.PromSample, 0, len(domains))
+func runPrometheus(fetcher cert.CertificateFetcher, targets []target, cfg flags.Config, fetchOpts cert.FetchOptions, pinHex string) int {
+	samples := make([]cert.PromSample, 0, len(targets))
 	hadError := false
 	expiring := false
-	for _, d := range domains {
-		info, err := fetcher.Fetch(d, cfg.Port, cfg.IPAddr, fetchOpts)
-		if err != nil {
+	for _, r := range fetchAll(fetcher, targets, cfg.IPAddr, fetchOpts, cfg.Concurrency) {
+		label := r.target.label()
+		if r.err != nil {
 			hadError = true
-			samples = append(samples, cert.PromSample{Domain: d, Err: err})
+			samples = append(samples, cert.PromSample{Domain: label, Err: r.err})
 			continue
 		}
-		samples = append(samples, cert.PromSample{Domain: d, Info: info})
-		if cfg.Threshold > 0 && info.MinDaysUntilExpiry() < cfg.Threshold {
+		samples = append(samples, cert.PromSample{Domain: label, Info: r.info})
+		if cfg.Threshold > 0 && r.info.MinDaysUntilExpiry() < cfg.Threshold {
 			expiring = true
 		}
 	}
@@ -344,13 +364,46 @@ func printSingle(printer cert.CertificatePrinter, info *cert.CertInfo, cfg flags
 	}
 }
 
-// runBatch checks every domain in turn and renders the aggregated result. In
-// JSON mode it emits an array (one object per domain, with an "error" entry for
-// failures); in text mode it prints one block per domain, with failures on
-// stderr. It returns the process exit code: 1 if any domain failed to be
+// fetchResult is one target's outcome from fetchAll: either Info or Err is set.
+type fetchResult struct {
+	target target
+	info   *cert.CertInfo
+	err    error
+}
+
+// fetchAll fetches every target's certificate, running up to concurrency fetches
+// at once, and returns the results in the same order as targets (so the rendered
+// output is deterministic regardless of completion order). A concurrency of 1 is
+// effectively sequential. The fetcher must be safe for concurrent use.
+func fetchAll(fetcher cert.CertificateFetcher, targets []target, ipaddr string, fetchOpts cert.FetchOptions, concurrency int) []fetchResult {
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	results := make([]fetchResult, len(targets))
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for i, t := range targets {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, t target) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			info, err := fetcher.Fetch(t.host, t.port, ipaddr, fetchOpts)
+			results[i] = fetchResult{target: t, info: info, err: err}
+		}(i, t)
+	}
+	wg.Wait()
+	return results
+}
+
+// runBatch checks every target and renders the aggregated result. Targets are
+// fetched with up to cfg.Concurrency in flight, then rendered in input order. In
+// JSON mode it emits an array (one object per target, with an "error" entry for
+// failures); in text mode it prints one block per target, with failures on
+// stderr. It returns the process exit code: 1 if any target failed to be
 // retrieved, otherwise 2 if any certificate in a chain expires within the
 // threshold, otherwise 0.
-func runBatch(fetcher cert.CertificateFetcher, printer cert.CertificatePrinter, domains []string, cfg flags.Config, opts cert.PrintOptions, fetchOpts cert.FetchOptions) int {
+func runBatch(fetcher cert.CertificateFetcher, printer cert.CertificatePrinter, targets []target, cfg flags.Config, opts cert.PrintOptions, fetchOpts cert.FetchOptions) int {
 	hadError := false
 	expiring := false
 	issuerFail := false
@@ -358,30 +411,31 @@ func runBatch(fetcher cert.CertificateFetcher, printer cert.CertificatePrinter, 
 	printedText := false
 	var entries []any
 
-	for _, d := range domains {
-		info, err := fetcher.Fetch(d, cfg.Port, cfg.IPAddr, fetchOpts)
-		if err != nil {
+	for _, r := range fetchAll(fetcher, targets, cfg.IPAddr, fetchOpts, cfg.Concurrency) {
+		label := r.target.label()
+		if r.err != nil {
 			hadError = true
 			if opts.JSON {
-				entries = append(entries, cert.ErrorPayload(d, err.Error()))
+				entries = append(entries, cert.ErrorPayload(label, r.err.Error()))
 			} else {
-				fmt.Fprintf(os.Stderr, "Error retrieving certificate for %s: %v\n", d, err)
+				fmt.Fprintf(os.Stderr, "Error retrieving certificate for %s: %v\n", label, r.err)
 			}
 			continue
 		}
+		info := r.info
 
 		if opts.JSON {
-			entries = append(entries, cert.Payload(info, d, opts.Chain, opts.Fingerprint))
+			entries = append(entries, cert.Payload(info, label, opts.Chain, opts.Fingerprint))
 		} else if cfg.Short {
-			// Multi-domain short mode: prefix each days count with its domain so
-			// the numbers stay attributable and greppable (domain<TAB>days).
-			fmt.Printf("%s\t", d)
+			// Multi-domain short mode: prefix each days count with its target so
+			// the numbers stay attributable and greppable (target<TAB>days).
+			fmt.Printf("%s\t", label)
 			printer.Print(info, opts)
 		} else {
 			if printedText {
 				fmt.Println()
 			}
-			fmt.Printf("==> %s\n", d)
+			fmt.Printf("==> %s\n", label)
 			printer.Print(info, opts)
 			printedText = true
 		}
@@ -423,7 +477,8 @@ func runBatch(fetcher cert.CertificateFetcher, printer cert.CertificatePrinter, 
 // address failed for a real reason (addresses unreachable from this host are
 // skipped, not errors), otherwise 2 if the certificates differ or any expires
 // within -threshold, otherwise 0.
-func runAllIPs(fetcher cert.CertificateFetcher, domain string, cfg flags.Config, opts cert.PrintOptions, fetchOpts cert.FetchOptions) int {
+func runAllIPs(fetcher cert.CertificateFetcher, t target, cfg flags.Config, opts cert.PrintOptions, fetchOpts cert.FetchOptions) int {
+	domain := t.host
 	ips, err := net.LookupIP(domain)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to resolve %s: %v\n", domain, err)
@@ -453,7 +508,7 @@ func runAllIPs(fetcher cert.CertificateFetcher, domain string, cfg flags.Config,
 
 	results := make([]cert.IPResult, 0, len(addrs))
 	for _, ip := range addrs {
-		info, err := fetcher.Fetch(domain, cfg.Port, ip, fetchOpts)
+		info, err := fetcher.Fetch(domain, t.port, ip, fetchOpts)
 		results = append(results, cert.IPResult{
 			IP:      ip,
 			Info:    info,
@@ -462,7 +517,7 @@ func runAllIPs(fetcher cert.CertificateFetcher, domain string, cfg flags.Config,
 		})
 	}
 
-	res := cert.PrintAllIPs(domain, results, opts)
+	res := cert.PrintAllIPs(t.label(), results, opts)
 	switch {
 	case res.Reachable == 0:
 		return exitError
@@ -491,32 +546,110 @@ func isUnreachable(err error) bool {
 		strings.Contains(s, "no route to host")
 }
 
-// resolveDomains builds the ordered, de-duplicated list of domains from the
+// target is a single check target: the hostname to connect to and verify against
+// (used for SNI) plus the port. The port comes from the target token itself
+// (host:port or a URL) or, for a bare host, from the default port.
+type target struct {
+	host string
+	port string
+}
+
+// label renders the target for output: the bare host on the standard HTTPS port,
+// otherwise host:port (IPv6 bracketed).
+func (t target) label() string {
+	if t.port == defaultPort {
+		return t.host
+	}
+	return net.JoinHostPort(t.host, t.port)
+}
+
+// parseTarget turns one -domain/-domain-file token into a target. It accepts a
+// bare host (uses defaultPort), a host:port pair, or a URL (https://host:port/…,
+// scheme and path discarded). An unbracketed IPv6 literal has too many colons for
+// host:port and is treated as a bare host.
+func parseTarget(tok, defaultPort string) (target, error) {
+	if strings.Contains(tok, "://") {
+		u, err := url.Parse(tok)
+		if err != nil {
+			return target{}, fmt.Errorf("invalid target URL %q: %v", tok, err)
+		}
+		host := u.Hostname()
+		if host == "" {
+			return target{}, fmt.Errorf("invalid target %q: missing host", tok)
+		}
+		port := u.Port()
+		if port == "" {
+			return target{host: host, port: defaultPort}, nil
+		}
+		if err := validatePort(port); err != nil {
+			return target{}, fmt.Errorf("invalid target %q: %v", tok, err)
+		}
+		return target{host: host, port: port}, nil
+	}
+	if host, port, err := net.SplitHostPort(tok); err == nil {
+		if port == "" {
+			port = defaultPort
+		}
+		if err := validatePort(port); err != nil {
+			return target{}, fmt.Errorf("invalid target %q: %v", tok, err)
+		}
+		return target{host: host, port: port}, nil
+	}
+	return target{host: tok, port: defaultPort}, nil
+}
+
+// validatePort checks that p is a decimal port in the 1–65535 range.
+func validatePort(p string) error {
+	n, err := strconv.Atoi(p)
+	if err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("port %q is not a number in 1-65535", p)
+	}
+	return nil
+}
+
+// resolveTargets builds the ordered, de-duplicated list of targets from the
 // comma-separated -domain flag and the -domain-file flag (one per line, "-"
-// reads stdin; blank lines and lines starting with "#" are ignored).
-func resolveDomains(cfg flags.Config) ([]string, error) {
-	var out []string
+// reads stdin; blank lines and lines starting with "#" are ignored). defaultPort
+// is used for tokens that do not carry their own port. De-duplication is by the
+// resolved host:port pair, so "a.com" and "a.com:443" collapse to one.
+func resolveTargets(cfg flags.Config, defaultPort string) ([]target, error) {
+	var out []target
 	seen := make(map[string]bool)
-	add := func(d string) {
-		d = strings.TrimSpace(d)
-		if d == "" || seen[d] {
+	var firstErr error
+	add := func(tok string) {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
 			return
 		}
-		seen[d] = true
-		out = append(out, d)
+		t, err := parseTarget(tok, defaultPort)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			return
+		}
+		key := t.host + "\x00" + t.port
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, t)
 	}
 
-	for _, d := range strings.Split(cfg.Domain, ",") {
-		add(d)
+	for _, tok := range strings.Split(cfg.Domain, ",") {
+		add(tok)
 	}
 	if cfg.DomainFile != "" {
 		lines, err := readDomainFile(cfg.DomainFile)
 		if err != nil {
 			return nil, err
 		}
-		for _, d := range lines {
-			add(d)
+		for _, l := range lines {
+			add(l)
 		}
+	}
+	if firstErr != nil {
+		return nil, firstErr
 	}
 	return out, nil
 }

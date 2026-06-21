@@ -40,6 +40,7 @@ type Config struct {
 	IPv4Only     bool   // Restrict -all-ips to IPv4 addresses
 	IPv6Only     bool   // Restrict -all-ips to IPv6 addresses
 	Timeout      int    // Connection timeout in seconds for fetching a remote certificate
+	Concurrency  int    // Number of targets to check in parallel in a batch (1 = sequential)
 	StartTLS     string // STARTTLS protocol to upgrade the connection: smtp/imap/pop3/ftp (empty = direct TLS)
 	ShowVersion  bool   // Show version and exit
 }
@@ -86,6 +87,7 @@ type DefaultFlagParser struct {
 	ipv4Only     *bool
 	ipv6Only     *bool
 	timeout      *int
+	concurrency  *int
 	starttls     *string
 	showVersion  *bool
 }
@@ -119,6 +121,7 @@ func (d *DefaultFlagParser) Parse() Config {
 		IPv4Only:     *d.ipv4Only,
 		IPv6Only:     *d.ipv6Only,
 		Timeout:      *d.timeout,
+		Concurrency:  *d.concurrency,
 		StartTLS:     *d.starttls,
 		ShowVersion:  *d.showVersion,
 	}
@@ -140,7 +143,7 @@ func NewDefaultFlagParser() FlagParser {
 	fs := flag.NewFlagSet(appName, flag.ExitOnError)
 	p := &DefaultFlagParser{
 		fs:           fs,
-		domain:       fs.String("domain", "", "Domain(s) to check, comma-separated for several (e.g. a.com,b.com)"),
+		domain:       fs.String("domain", "", "Domain(s) to check, comma-separated for several; each may carry a port (host:port) or be a URL (e.g. a.com,b.com:8443)"),
 		domainFile:   fs.String("domain-file", "", "Path to a file with one domain per line (\"-\" reads stdin)"),
 		certFile:     fs.String("certfile", "", "Path to the local certificate file"),
 		port:         fs.String("port", "443", "Port to connect to (optional)"),
@@ -164,6 +167,7 @@ func NewDefaultFlagParser() FlagParser {
 		ipv4Only:     fs.Bool("4", false, "With -all-ips, check IPv4 addresses only"),
 		ipv6Only:     fs.Bool("6", false, "With -all-ips, check IPv6 addresses only"),
 		timeout:      fs.Int("timeout", 10, "Connection timeout in seconds when fetching a remote certificate"),
+		concurrency:  fs.Int("concurrency", 1, "Number of targets to check in parallel when several are given (1 = sequential)"),
 		starttls:     fs.String("starttls", "", "Upgrade the connection via STARTTLS: smtp, imap, pop3 or ftp (default: direct TLS)"),
 		showVersion:  fs.Bool("version", false, "Show version"),
 	}
@@ -190,8 +194,8 @@ func NewDefaultFlagParser() FlagParser {
 		fmt.Fprintf(out, "%s - %s\n\n", appName, appShortDesc)
 		fmt.Fprintf(out, "Usage:\n")
 		fmt.Fprintf(out, "  %s -domain example.com\n", appName)
-		fmt.Fprintf(out, "  %s -domain a.com,b.com\n", appName)
-		fmt.Fprintf(out, "  %s -domain-file domains.txt\n", appName)
+		fmt.Fprintf(out, "  %s -domain a.com,b.com:8443\n", appName)
+		fmt.Fprintf(out, "  %s -domain-file domains.txt -concurrency 10\n", appName)
 		fmt.Fprintf(out, "  %s -domain smtp.example.com -starttls smtp\n", appName)
 		fmt.Fprintf(out, "  %s -domain example.com -chain\n", appName)
 		fmt.Fprintf(out, "  %s -domain example.com -all-ips\n", appName)
@@ -209,6 +213,7 @@ func NewDefaultFlagParser() FlagParser {
 		flagLine("servername")
 		flagLine("starttls")
 		flagLine("timeout")
+		flagLine("concurrency")
 		flagLine("cafile")
 		flagLine("client-cert")
 		flagLine("client-key")

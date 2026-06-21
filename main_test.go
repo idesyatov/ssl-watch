@@ -39,40 +39,41 @@ func captureStdout(t *testing.T, fn func()) string {
 
 // TestValidate covers the flag-combination guards extracted from main().
 func TestValidate(t *testing.T) {
-	ok := flags.Config{Output: "text", Timeout: 10}
-	one := []string{"a.com"}
-	two := []string{"a.com", "b.com"}
+	ok := flags.Config{Output: "text", Timeout: 10, Concurrency: 1}
+	one := hostTargets("a.com")
+	two := hostTargets("a.com", "b.com")
 
 	cases := []struct {
 		name    string
 		cfg     flags.Config
-		domains []string
+		targets []target
 		wantErr bool
 	}{
 		{"single domain", ok, one, false},
-		{"certfile only", flags.Config{Output: "text", Timeout: 10, CertFile: "c.pem"}, nil, false},
+		{"certfile only", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, CertFile: "c.pem"}, nil, false},
 		{"no target", ok, nil, true},
-		{"bad output", flags.Config{Output: "yaml", Timeout: 10}, one, true},
-		{"bad timeout", flags.Config{Output: "text", Timeout: 0}, one, true},
-		{"ipaddr multi", flags.Config{Output: "text", Timeout: 10, IPAddr: "1.2.3.4"}, two, true},
-		{"all-ips + certfile", flags.Config{Output: "text", Timeout: 10, AllIPs: true, CertFile: "c.pem"}, one, true},
-		{"all-ips + strict", flags.Config{Output: "text", Timeout: 10, AllIPs: true, Strict: true}, one, true},
-		{"all-ips multi", flags.Config{Output: "text", Timeout: 10, AllIPs: true}, two, true},
-		{"-4 without all-ips", flags.Config{Output: "text", Timeout: 10, IPv4Only: true}, one, true},
-		{"cafile + insecure", flags.Config{Output: "text", Timeout: 10, CAFile: "r.pem", Insecure: true}, one, true},
-		{"client-cert without key", flags.Config{Output: "text", Timeout: 10, ClientCert: "c.crt"}, one, true},
-		{"client-cert + certfile", flags.Config{Output: "text", Timeout: 10, ClientCert: "c.crt", ClientKey: "c.key", CertFile: "f.pem"}, nil, true},
-		{"client-cert + key ok", flags.Config{Output: "text", Timeout: 10, ClientCert: "c.crt", ClientKey: "c.key"}, one, false},
-		{"servername multi", flags.Config{Output: "text", Timeout: 10, ServerName: "x"}, two, true},
-		{"pin multi", flags.Config{Output: "text", Timeout: 10, Pin: "sha256:ab"}, two, true},
-		{"pem + json", flags.Config{Output: "json", Timeout: 10, Pem: true}, one, true},
-		{"pem + export", flags.Config{Output: "text", Timeout: 10, Pem: true, Export: "f"}, one, true},
-		{"prometheus + all-ips", flags.Config{Output: "prometheus", Timeout: 10, AllIPs: true}, one, true},
-		{"bad starttls", flags.Config{Output: "text", Timeout: 10, StartTLS: "gopher"}, one, true},
-		{"good starttls", flags.Config{Output: "text", Timeout: 10, StartTLS: "smtp"}, one, false},
+		{"bad output", flags.Config{Output: "yaml", Timeout: 10, Concurrency: 1}, one, true},
+		{"bad timeout", flags.Config{Output: "text", Timeout: 0, Concurrency: 1}, one, true},
+		{"bad concurrency", flags.Config{Output: "text", Timeout: 10, Concurrency: 0}, one, true},
+		{"ipaddr multi", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, IPAddr: "1.2.3.4"}, two, true},
+		{"all-ips + certfile", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, AllIPs: true, CertFile: "c.pem"}, one, true},
+		{"all-ips + strict", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, AllIPs: true, Strict: true}, one, true},
+		{"all-ips multi", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, AllIPs: true}, two, true},
+		{"-4 without all-ips", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, IPv4Only: true}, one, true},
+		{"cafile + insecure", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, CAFile: "r.pem", Insecure: true}, one, true},
+		{"client-cert without key", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, ClientCert: "c.crt"}, one, true},
+		{"client-cert + certfile", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, ClientCert: "c.crt", ClientKey: "c.key", CertFile: "f.pem"}, nil, true},
+		{"client-cert + key ok", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, ClientCert: "c.crt", ClientKey: "c.key"}, one, false},
+		{"servername multi", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, ServerName: "x"}, two, true},
+		{"pin multi", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, Pin: "sha256:ab"}, two, true},
+		{"pem + json", flags.Config{Output: "json", Timeout: 10, Concurrency: 1, Pem: true}, one, true},
+		{"pem + export", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, Pem: true, Export: "f"}, one, true},
+		{"prometheus + all-ips", flags.Config{Output: "prometheus", Timeout: 10, Concurrency: 1, AllIPs: true}, one, true},
+		{"bad starttls", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, StartTLS: "gopher"}, one, true},
+		{"good starttls", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, StartTLS: "smtp"}, one, false},
 	}
 	for _, tc := range cases {
-		if err := validate(tc.cfg, tc.domains); (err != nil) != tc.wantErr {
+		if err := validate(tc.cfg, tc.targets); (err != nil) != tc.wantErr {
 			t.Errorf("%s: validate err=%v, wantErr=%v", tc.name, err, tc.wantErr)
 		}
 	}
@@ -147,32 +148,85 @@ func TestIsUnreachable(t *testing.T) {
 	}
 }
 
-// TestResolveDomains verifies comma splitting, trimming, de-duplication and
-// reading from a file.
-func TestResolveDomains(t *testing.T) {
+// TestParseTarget verifies bare host, host:port, URL and IPv6 parsing, the
+// default-port fallback and rejection of an out-of-range port.
+func TestParseTarget(t *testing.T) {
+	cases := []struct {
+		in       string
+		wantHost string
+		wantPort string
+		wantErr  bool
+	}{
+		{"example.com", "example.com", "443", false},
+		{"example.com:8443", "example.com", "8443", false},
+		{"https://example.com:8443/path", "example.com", "8443", false},
+		{"https://example.com/path", "example.com", "443", false},
+		{"[2606:4700::1]:8443", "2606:4700::1", "8443", false},
+		{"2606:4700::1", "2606:4700::1", "443", false},
+		{"example.com:99999", "", "", true},
+		{"example.com:abc", "", "", true},
+	}
+	for _, c := range cases {
+		got, err := parseTarget(c.in, "443")
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("parseTarget(%q): expected error, got %+v", c.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("parseTarget(%q): unexpected error: %v", c.in, err)
+			continue
+		}
+		if got.host != c.wantHost || got.port != c.wantPort {
+			t.Errorf("parseTarget(%q) = {%q,%q}, want {%q,%q}", c.in, got.host, got.port, c.wantHost, c.wantPort)
+		}
+	}
+}
+
+// TestResolveTargets verifies comma splitting, trimming, per-target ports,
+// de-duplication by host:port and reading from a file.
+func TestResolveTargets(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "domains.txt")
-	if err := os.WriteFile(file, []byte("c.com\n# comment\n\n a.com \nd.com\n"), 0o600); err != nil {
+	if err := os.WriteFile(file, []byte("c.com\n# comment\n\n a.com \nd.com:8443\n"), 0o600); err != nil {
 		t.Fatalf("failed to write domain file: %v", err)
 	}
 
-	cfg := flags.Config{Domain: "a.com, b.com ,a.com", DomainFile: file}
-	got, err := resolveDomains(cfg)
+	// "a.com" and "a.com:443" collapse; "d.com" and "d.com:8443" stay distinct.
+	cfg := flags.Config{Domain: "a.com, b.com ,a.com:443", DomainFile: file}
+	got, err := resolveTargets(cfg, "443")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	want := []string{"a.com", "b.com", "c.com", "d.com"}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("expected %v, got %v", want, got)
+	want := []target{
+		{"a.com", "443"}, {"b.com", "443"}, {"c.com", "443"}, {"d.com", "8443"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d targets, got %d: %+v", len(want), len(got), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("target %d = %+v, want %+v", i, got[i], want[i])
+		}
 	}
 }
 
-// TestResolveDomains_FileError verifies a missing domain file surfaces an error.
-func TestResolveDomains_FileError(t *testing.T) {
+// TestResolveTargets_FileError verifies a missing domain file surfaces an error.
+func TestResolveTargets_FileError(t *testing.T) {
 	cfg := flags.Config{DomainFile: filepath.Join(t.TempDir(), "nope.txt")}
-	if _, err := resolveDomains(cfg); err == nil {
+	if _, err := resolveTargets(cfg, "443"); err == nil {
 		t.Error("expected error for missing domain file, got nil")
 	}
+}
+
+// hostTargets builds default-port targets from bare hostnames, for batch tests.
+func hostTargets(hosts ...string) []target {
+	ts := make([]target, len(hosts))
+	for i, h := range hosts {
+		ts[i] = target{host: h, port: "443"}
+	}
+	return ts
 }
 
 // TestRunBatch_JSON verifies the multi-domain JSON output is an array carrying a
@@ -185,13 +239,13 @@ func TestRunBatch_JSON(t *testing.T) {
 		},
 		errs: map[string]error{"bad.example": io.ErrUnexpectedEOF},
 	}
-	domains := []string{"a.example", "b.example", "bad.example"}
-	cfg := flags.Config{Output: "json"}
+	targets := hostTargets("a.example", "b.example", "bad.example")
+	cfg := flags.Config{Output: "json", Concurrency: 1}
 	opts := cert.PrintOptions{JSON: true}
 
 	var code int
 	out := captureStdout(t, func() {
-		code = runBatch(fetcher, &cert.CertificatePrinterImpl{}, domains, cfg, opts, cert.FetchOptions{Timeout: time.Second})
+		code = runBatch(fetcher, &cert.CertificatePrinterImpl{}, targets, cfg, opts, cert.FetchOptions{Timeout: time.Second})
 	})
 
 	if code != 1 {
@@ -222,13 +276,13 @@ func TestRunBatch_Text(t *testing.T) {
 			"b.example": leafInfo("b.example", 5),
 		},
 	}
-	domains := []string{"a.example", "b.example"}
-	cfg := flags.Config{Output: "text", Threshold: 30}
+	targets := hostTargets("a.example", "b.example")
+	cfg := flags.Config{Output: "text", Threshold: 30, Concurrency: 1}
 	opts := cert.PrintOptions{Threshold: 30}
 
 	var code int
 	out := captureStdout(t, func() {
-		code = runBatch(fetcher, &cert.CertificatePrinterImpl{}, domains, cfg, opts, cert.FetchOptions{Timeout: time.Second})
+		code = runBatch(fetcher, &cert.CertificatePrinterImpl{}, targets, cfg, opts, cert.FetchOptions{Timeout: time.Second})
 	})
 
 	if code != 2 {
@@ -250,12 +304,12 @@ func TestRunBatch_Short(t *testing.T) {
 			"b.example": leafInfo("b.example", 5),
 		},
 	}
-	domains := []string{"a.example", "b.example"}
-	cfg := flags.Config{Output: "text", Short: true}
+	targets := hostTargets("a.example", "b.example")
+	cfg := flags.Config{Output: "text", Short: true, Concurrency: 1}
 	opts := cert.PrintOptions{Short: true}
 
 	out := captureStdout(t, func() {
-		runBatch(fetcher, &cert.CertificatePrinterImpl{}, domains, cfg, opts, cert.FetchOptions{Timeout: time.Second})
+		runBatch(fetcher, &cert.CertificatePrinterImpl{}, targets, cfg, opts, cert.FetchOptions{Timeout: time.Second})
 	})
 
 	for _, want := range []string{"a.example\t90", "b.example\t5"} {
@@ -265,5 +319,36 @@ func TestRunBatch_Short(t *testing.T) {
 	}
 	if strings.Contains(out, "==>") || strings.Contains(out, "Certificate for") {
 		t.Errorf("short output should not contain full details, got:\n%s", out)
+	}
+}
+
+// TestRunBatch_ConcurrencyOrder verifies that with concurrency > 1 the output is
+// still rendered in input order, and that per-target ports show in the label.
+func TestRunBatch_ConcurrencyOrder(t *testing.T) {
+	fetcher := &fakeFetcher{
+		infos: map[string]*cert.CertInfo{
+			"a.example": leafInfo("a.example", 90),
+			"b.example": leafInfo("b.example", 80),
+			"c.example": leafInfo("c.example", 70),
+		},
+	}
+	targets := []target{
+		{"a.example", "443"}, {"b.example", "8443"}, {"c.example", "443"},
+	}
+	cfg := flags.Config{Output: "text", Concurrency: 3}
+	opts := cert.PrintOptions{}
+
+	out := captureStdout(t, func() {
+		runBatch(fetcher, &cert.CertificatePrinterImpl{}, targets, cfg, opts, cert.FetchOptions{Timeout: time.Second})
+	})
+
+	ia := strings.Index(out, "==> a.example")
+	ib := strings.Index(out, "==> b.example:8443")
+	ic := strings.Index(out, "==> c.example")
+	if ia < 0 || ib < 0 || ic < 0 {
+		t.Fatalf("expected all three headers (with port on b), got:\n%s", out)
+	}
+	if ia >= ib || ib >= ic {
+		t.Errorf("expected input order a,b,c preserved, got positions %d,%d,%d:\n%s", ia, ib, ic, out)
 	}
 }

@@ -36,6 +36,7 @@ func TestParse(t *testing.T) {
 		"-all-ips",
 		"-4",
 		"-timeout", "5",
+		"-concurrency", "8",
 		"-starttls", "smtp",
 		"-version"}
 
@@ -80,6 +81,9 @@ func TestParse(t *testing.T) {
 	}
 	if cfg.Timeout != 5 {
 		t.Errorf("expected timeout to be 5, got %d", cfg.Timeout)
+	}
+	if cfg.Concurrency != 8 {
+		t.Errorf("expected concurrency to be 8, got %d", cfg.Concurrency)
 	}
 	if cfg.DomainFile != "domains.txt" {
 		t.Errorf("expected domainFile to be 'domains.txt', got '%s'", cfg.DomainFile)
@@ -129,6 +133,9 @@ func TestParseDefaults(t *testing.T) {
 	if cfg.Timeout != 10 {
 		t.Errorf("expected default timeout 10, got %d", cfg.Timeout)
 	}
+	if cfg.Concurrency != 1 {
+		t.Errorf("expected default concurrency 1, got %d", cfg.Concurrency)
+	}
 }
 
 // TestPrintDefaults tests the PrintDefaults method of the DefaultFlagParser.
@@ -161,7 +168,7 @@ func TestUsage(t *testing.T) {
 	parser.Usage()
 
 	out := buf.String()
-	for _, want := range []string{GitURL, "Usage:", "Target:", "Connection:", "Output:", "Monitoring:", "-domain", "-domain-file", "-threshold", "-timeout", "-starttls", "-cafile", "-servername", "-client-cert", "-client-key", "-chain", "-fingerprint", "-pin", "-expect-issuer", "-strict", "-pem", "-export", "-all-ips", "-4", "-6", "prometheus"} {
+	for _, want := range []string{GitURL, "Usage:", "Target:", "Connection:", "Output:", "Monitoring:", "-domain", "-domain-file", "-threshold", "-timeout", "-concurrency", "-starttls", "-cafile", "-servername", "-client-cert", "-client-key", "-chain", "-fingerprint", "-pin", "-expect-issuer", "-strict", "-pem", "-export", "-all-ips", "-4", "-6", "prometheus"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected usage output to contain %q, got:\n%s", want, out)
 		}

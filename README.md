@@ -36,8 +36,11 @@ curl -fsSL https://raw.githubusercontent.com/idesyatov/ssl-watch/master/install.
 # Check a domain
 ssl-watch -domain example.com
 
-# Check several domains at once
-ssl-watch -domain a.com,b.com,c.com
+# Check several domains at once, each with its own port if needed
+ssl-watch -domain a.com,b.com:8443,c.com
+
+# Check many domains in parallel (output order preserved)
+ssl-watch -domain-file domains.txt -concurrency 10
 
 # Check the cert on every balancer IP of a domain, and compare them
 ssl-watch -domain example.com -all-ips
@@ -120,7 +123,7 @@ make build
 
 **Target** (one is required)
 
-- `-domain <domains>` — domain to check, or several comma-separated (e.g. `a.com,b.com`).
+- `-domain <domains>` — domain to check, or several comma-separated (e.g. `a.com,b.com`). Each target may carry its own port as `host:port` or a URL (`https://host:port/…`, scheme and path are discarded); a bare host uses `-port`. IPv6 literals must be bracketed (`[2606:4700::1]:8443`).
 - `-domain-file <path>` — read domains from a file, one per line (`-` reads stdin); blank lines and `#` comments are ignored.
 - `-certfile <path>` — inspect a local certificate file instead of connecting.
 
@@ -131,6 +134,7 @@ make build
 - `-servername <name>` — SNI and hostname to verify against, overriding the domain (e.g. to check a specific vhost's certificate on a host reached by `-ipaddr`).
 - `-starttls <proto>` — upgrade via STARTTLS before reading the certificate: `smtp`, `imap`, `pop3` or `ftp`.
 - `-timeout <seconds>` — connection timeout when fetching (default `10`).
+- `-concurrency <N>` — number of targets to check in parallel when several are given (default `1` = sequential). Output order is preserved regardless. No effect on a single target.
 - `-cafile <path>` — verify the chain against the roots in this PEM bundle **instead of** the system roots (like `openssl verify -CAfile` / `curl --cacert`). Useful for an internal/corporate/national CA. Cannot be combined with `-insecure`.
 - `-client-cert <path>` / `-client-key <path>` — present a client certificate (PEM) and its key for mutual TLS. Both are required together.
 - `-insecure` — skip certificate chain verification (e.g. for self-signed certs).
@@ -155,7 +159,7 @@ make build
 
 In text mode, when writing to an interactive terminal, the days-remaining value and chain status are colorized (red/yellow/green). Color is disabled automatically when output is piped/redirected or when `NO_COLOR` is set.
 
-Several domains can be checked in one run via comma-separated `-domain` or `-domain-file`. In text mode each is printed as its own block prefixed with `==> <domain>` (or, with `-short`, one `domain<TAB>days` line each); in JSON mode the output becomes an array (one object per domain, each tagged with `domain`, and an `{ "domain", "error" }` entry for any that could not be retrieved).
+Several domains can be checked in one run via comma-separated `-domain` or `-domain-file`, optionally in parallel with `-concurrency N` (output order is preserved). In text mode each is printed as its own block prefixed with `==> <domain>` (or, with `-short`, one `domain<TAB>days` line each); in JSON mode the output becomes an array (one object per domain, each tagged with `domain`, and an `{ "domain", "error" }` entry for any that could not be retrieved). A target's `domain`/header label includes the port when it is not `443` (e.g. `api.example.com:8443`).
 
 </details>
 
@@ -191,8 +195,11 @@ ssl-watch -domain example.com -timeout 3
 # Several domains at once
 ssl-watch -domain a.com,b.com,c.com
 
-# A list of domains from a file, or from stdin
-ssl-watch -domain-file domains.txt -threshold 30
+# Per-target port (host:port) or a URL — mix freely
+ssl-watch -domain a.com,mail.example.com:8443,https://api.example.com:9443/health
+
+# A list of domains from a file, or from stdin (in parallel)
+ssl-watch -domain-file domains.txt -threshold 30 -concurrency 20
 cat domains.txt | ssl-watch -domain-file -
 
 # A mail server certificate via STARTTLS (defaults to port 587)
