@@ -145,7 +145,7 @@ func NewDefaultFlagParser() FlagParser {
 		fs:           fs,
 		domain:       fs.String("domain", "", "Domain(s) to check, comma-separated for several; each may carry a port (host:port) or be a URL (e.g. a.com,b.com:8443)"),
 		domainFile:   fs.String("domain-file", "", "Path to a file with one domain per line (\"-\" reads stdin)"),
-		certFile:     fs.String("certfile", "", "Path to the local certificate file"),
+		certFile:     fs.String("certfile", "", "Path to the local certificate file (- for stdin)"),
 		port:         fs.String("port", "443", "Default port for targets that don't carry their own (host:port overrides)"),
 		ipaddr:       fs.String("ipaddr", "", "IP address to connect to (optional)"),
 		serverName:   fs.String("servername", "", "SNI/hostname to verify against, overriding the domain (e.g. with -ipaddr)"),
@@ -200,7 +200,8 @@ func NewDefaultFlagParser() FlagParser {
 		fmt.Fprintf(out, "  %s -domain example.com -chain\n", appName)
 		fmt.Fprintf(out, "  %s -domain example.com -all-ips\n", appName)
 		fmt.Fprintf(out, "  %s -domain example.com -pin sha256:<hex>\n", appName)
-		fmt.Fprintf(out, "  %s -certfile /path/to/cert.crt\n\n", appName)
+		fmt.Fprintf(out, "  %s -certfile /path/to/cert.crt\n", appName)
+		fmt.Fprintf(out, "  cat cert.pem | %s -certfile -\n\n", appName)
 		fmt.Fprintf(out, "GitHub: %s\n\n", GitURL)
 
 		fmt.Fprintf(out, "Target:\n")

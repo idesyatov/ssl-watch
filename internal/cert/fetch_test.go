@@ -66,6 +66,94 @@ func TestCertificateLoaderImpl_Load(t *testing.T) {
 	}
 }
 
+// TestCertificateLoaderImpl_Load_Stdin verifies that a certFile of "-" reads the
+// PEM from standard input.
+func TestCertificateLoaderImpl_Load_Stdin(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "stdin-test.example"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("failed to create certificate: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create pipe: %v", err)
+	}
+	orig := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = orig }()
+
+	go func() {
+		_, _ = w.Write(pemBytes)
+		_ = w.Close()
+	}()
+
+	loader := &CertificateLoaderImpl{}
+	info, err := loader.Load("-")
+	if err != nil {
+		t.Fatalf("unexpected error loading certificate from stdin: %v", err)
+	}
+	if info.Cert.Subject.CommonName != "stdin-test.example" {
+		t.Errorf("expected CommonName 'stdin-test.example', got '%s'", info.Cert.Subject.CommonName)
+	}
+	if !info.FromFile {
+		t.Error("expected FromFile to be true for a stdin-loaded certificate")
+	}
+}
+
+// TestCertificateLoaderImpl_Load_Bundle verifies that a PEM file holding several
+// CERTIFICATE blocks is loaded as a chain (leaf first, intermediates following).
+func TestCertificateLoaderImpl_Load_Bundle(t *testing.T) {
+	mkCert := func(cn string) []byte {
+		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatalf("failed to generate key: %v", err)
+		}
+		template := x509.Certificate{
+			SerialNumber: big.NewInt(1),
+			Subject:      pkix.Name{CommonName: cn},
+			NotBefore:    time.Now().Add(-time.Hour),
+			NotAfter:     time.Now().Add(24 * time.Hour),
+		}
+		der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+		if err != nil {
+			t.Fatalf("failed to create certificate: %v", err)
+		}
+		return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	}
+
+	bundle := append(mkCert("leaf.example"), mkCert("inter.example")...)
+	bundlePath := filepath.Join(t.TempDir(), "fullchain.pem")
+	if err := os.WriteFile(bundlePath, bundle, 0o600); err != nil {
+		t.Fatalf("failed to write bundle: %v", err)
+	}
+
+	loader := &CertificateLoaderImpl{}
+	info, err := loader.Load(bundlePath)
+	if err != nil {
+		t.Fatalf("unexpected error loading bundle: %v", err)
+	}
+	if info.Cert.Subject.CommonName != "leaf.example" {
+		t.Errorf("expected leaf CommonName 'leaf.example', got '%s'", info.Cert.Subject.CommonName)
+	}
+	if len(info.Chain) != 2 {
+		t.Fatalf("expected 2 certificates in chain, got %d", len(info.Chain))
+	}
+	if info.Chain[1].Subject.CommonName != "inter.example" {
+		t.Errorf("expected second cert 'inter.example', got '%s'", info.Chain[1].Subject.CommonName)
+	}
+}
+
 // TestCertificateLoaderImpl_Load_Errors verifies Load returns errors for a missing
 // file and for a file that does not contain a valid PEM certificate.
 func TestCertificateLoaderImpl_Load_Errors(t *testing.T) {

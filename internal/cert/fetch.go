@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
@@ -231,24 +232,56 @@ func expectTaggedOK(br *bufio.Reader, tag string) error {
 type CertificateLoaderImpl struct{}
 
 // Load reads a certificate from the specified file and returns it.
-// Returns an error if the file cannot be read or if the certificate cannot be parsed.
+// A certFile of "-" reads the PEM from standard input.
+// Returns an error if the source cannot be read or if the certificate cannot be parsed.
 func (l *CertificateLoaderImpl) Load(certFile string) (*CertInfo, error) {
-	certPEM, err := os.ReadFile(certFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read certificate file %s: %v", certFile, err)
+	var certPEM []byte
+	var err error
+	if certFile == "-" {
+		certPEM, err = io.ReadAll(os.Stdin)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read certificate from stdin: %v", err)
+		}
+	} else {
+		certPEM, err = os.ReadFile(certFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read certificate file %s: %v", certFile, err)
+		}
 	}
 
-	block, _ := pem.Decode(certPEM)
-	if block == nil || block.Type != "CERTIFICATE" {
-		return nil, fmt.Errorf("failed to parse certificate from file %s", certFile)
+	src := certFile
+	if certFile == "-" {
+		src = "stdin"
 	}
 
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, err
+	// Parse every CERTIFICATE block so a bundle (e.g. fullchain.pem) is treated
+	// as a chain: the first is the leaf, the rest become the chain.
+	var chain []*x509.Certificate
+	rest := certPEM
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		c, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		chain = append(chain, c)
+	}
+	if len(chain) == 0 {
+		return nil, fmt.Errorf("failed to parse certificate from %s", src)
 	}
 
-	return &CertInfo{Cert: cert, FromFile: true}, nil
+	info := &CertInfo{Cert: chain[0], FromFile: true}
+	if len(chain) > 1 {
+		info.Chain = chain
+	}
+	return info, nil
 }
 
 // LoadClientCert loads a client certificate and its private key from PEM files,

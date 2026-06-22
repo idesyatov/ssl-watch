@@ -125,7 +125,7 @@ make build
 
 - `-domain <domains>` — domain to check, or several comma-separated (e.g. `a.com,b.com`). Each target may carry its own port as `host:port` or a URL (`https://host:port/…`, scheme and path are discarded); a bare host uses `-port`. IPv6 literals must be bracketed (`[2606:4700::1]:8443`).
 - `-domain-file <path>` — read domains from a file, one per line (`-` reads stdin); blank lines and `#` comments are ignored.
-- `-certfile <path>` — inspect a local certificate file instead of connecting.
+- `-certfile <path>` — inspect a local certificate file instead of connecting. Use `-` to read the PEM from stdin (e.g. `cat cert.pem | ssl-watch -certfile -`). A bundle with several `CERTIFICATE` blocks (e.g. `fullchain.pem`) is read as a chain — the first block is the leaf, the rest enable `-chain`, the intermediate-expiry warning, and full-chain `-pem`/`-export`.
 
 **Connection**
 
