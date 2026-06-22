@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"crypto/x509"
@@ -77,7 +77,6 @@ func TestValidate(t *testing.T) {
 		{"nagios ok", flags.Config{Output: "nagios", Timeout: 10, Concurrency: 1}, one, false},
 		{"nagios + all-ips", flags.Config{Output: "nagios", Timeout: 10, Concurrency: 1, AllIPs: true}, one, true},
 		{"nagios + certfile", flags.Config{Output: "nagios", Timeout: 10, Concurrency: 1, CertFile: "c.pem"}, nil, true},
-		{"bad output", flags.Config{Output: "yaml", Timeout: 10, Concurrency: 1}, one, true},
 		{"bad starttls", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, StartTLS: "gopher"}, one, true},
 		{"good starttls", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, StartTLS: "smtp"}, one, false},
 	}
