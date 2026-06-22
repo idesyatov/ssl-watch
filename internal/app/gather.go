@@ -1,8 +1,6 @@
 package app
 
 import (
-	"net"
-	"strings"
 	"sync"
 
 	"github.com/idesyatov/ssl-watch/internal/cert"
@@ -59,21 +57,4 @@ func collectSamples(fetcher cert.CertificateFetcher, targets []target, cfg flags
 		}
 	}
 	return samples, hadError, expiring
-}
-
-// lookupIP resolves a host to its IP addresses. It is a package variable so tests
-// can substitute a deterministic resolver in place of real DNS.
-var lookupIP = net.LookupIP
-
-// isUnreachable reports whether a connection error means the address family is
-// not routable from this host (e.g. no IPv6 route) — a benign skip rather than a
-// real failure. Matched by message text to stay portable (the syscall error
-// constants differ on Windows).
-func isUnreachable(err error) bool {
-	if err == nil {
-		return false
-	}
-	s := err.Error()
-	return strings.Contains(s, "network is unreachable") ||
-		strings.Contains(s, "no route to host")
 }
