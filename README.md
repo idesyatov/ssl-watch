@@ -9,6 +9,10 @@
 
 A small, dependency-free command-line tool — a single static Go binary — to inspect and monitor SSL/TLS certificates, for one domain, many at once, or a local certificate file. Built for cron/CI: a `-threshold` flag drives exit codes, and machine-readable output ships in five formats — `text · json · prometheus · csv · nagios` — to plug straight into a monitoring stack.
 
+<p align="center">
+  <img src="demo/demo.gif" alt="ssl-watch demo: healthy certificate, a broken trust chain with the issuer trail, and Nagios output" width="820">
+</p>
+
 **Why not just `openssl s_client`?** Three things it does that a raw handshake dump doesn't:
 
 - **Shows *where* trust breaks.** On a failed chain it classifies the reason (untrusted/unanchored root, incomplete chain, expired, hostname mismatch) and prints the issuer trail to the break — so you can spot a private root impersonating a public CA at a glance, without piecing it together by hand.
