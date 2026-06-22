@@ -1,6 +1,17 @@
 // Package app is the ssl-watch command body: it parses flags, resolves targets,
 // validates the request and dispatches to the right output path over the cert
 // package. The root main package only calls os.Exit(app.Run()).
+//
+// File map (setup → fetch → one file per output mode):
+//   - app.go: entry point — wiring (Run), dispatch (run), color and version
+//   - targets.go: parse and resolve targets (-domain, -domain-file, ports, dedup)
+//   - validate.go: reject unsupported flag combinations
+//   - gather.go: fetch every target concurrently, results kept in input order
+//   - single.go: single-target output and its exit code
+//   - batch.go: multi-target aggregated output
+//   - allips.go: -all-ips mode (resolve + per-address) and reachability helpers
+//   - export.go: PEM export (-pem / -export)
+//   - report.go: Prometheus / CSV / Nagios output dispatch
 package app
 
 import (

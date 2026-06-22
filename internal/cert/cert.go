@@ -2,6 +2,16 @@
 // (optionally via STARTTLS or an HTTP CONNECT proxy), loads them from PEM,
 // inspects trust/expiry/crypto, and renders the results as text, JSON,
 // Prometheus, CSV or a Nagios plugin line.
+//
+// File map (acquire → analyze → render):
+//   - cert.go: core types (CertInfo, FetchOptions, PrintOptions, interfaces) and day arithmetic
+//   - fetch.go: acquire a certificate over TLS — dial, HTTP CONNECT proxy, chain verification
+//   - starttls.go: STARTTLS upgrade for smtp/imap/pop3/ftp
+//   - load.go: acquire from disk — PEM file/stdin, client certificate, CA pool
+//   - inspect.go: analyze a certificate — expiry, weak crypto, chain trust, fingerprints, pins
+//   - render.go: human-readable text and JSON output
+//   - report.go: monitoring formats — Prometheus, CSV, Nagios
+//   - allips.go: compare and render results across a domain's IP addresses
 package cert
 
 import (
