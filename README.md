@@ -7,7 +7,7 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/idesyatov/ssl-watch)](https://goreportcard.com/report/github.com/idesyatov/ssl-watch)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A small, dependency-free command-line tool — a single static Go binary — to inspect and monitor SSL/TLS certificates, for one domain, many at once, or a local certificate file. Built for cron/CI: a `-threshold` flag drives exit codes, and `-output json` (or `-output prometheus`) makes the result machine-readable.
+A small, dependency-free command-line tool — a single static Go binary — to inspect and monitor SSL/TLS certificates, for one domain, many at once, or a local certificate file. Built for cron/CI: a `-threshold` flag drives exit codes, and machine-readable output ships in five formats — `text · json · prometheus · csv · nagios` — to plug straight into a monitoring stack.
 
 **Why not just `openssl s_client`?** Three things it does that a raw handshake dump doesn't:
 
@@ -167,7 +167,7 @@ check-cert:
 
 **Output**
 
-- `-output <text|json|prometheus|csv>` — output format (default `text`). `prometheus` emits metrics in the exposition format; `csv` emits one row per domain (header + RFC 3339 timestamps, quoted per RFC 4180) for a single domain or a batch. Neither `prometheus` nor `csv` combines with `-all-ips`/`-certfile`.
+- `-output <text|json|prometheus|csv|nagios>` — output format (default `text`). `prometheus` emits metrics in the exposition format; `csv` emits one row per domain (header + RFC 3339 timestamps, quoted per RFC 4180); `nagios` emits a Nagios/Icinga plugin line with performance data and **Nagios exit codes** (`0` OK / `1` WARNING / `2` CRITICAL — overriding the tool's normal codes). All three work for a single domain or a batch; none combines with `-all-ips`/`-certfile`.
 - `-short` — print only the number of days remaining. With several domains the count is prefixed with the domain (`domain<TAB>days`) so it stays greppable.
 - `-chain` — print every certificate in the chain (subject, issuer, expiry).
 - `-fingerprint` — print the certificate and public-key (SPKI) SHA-256 fingerprints.
@@ -254,7 +254,7 @@ ssl-watch -domain example.com -all-ips
 </details>
 
 <details>
-<summary><strong>Output &amp; JSON fields</strong></summary>
+<summary><strong>Output formats</strong> (text · JSON · <code>-all-ips</code>)</summary>
 
 ### Sample text output
 
@@ -340,6 +340,13 @@ Addresses that are unreachable from the host (e.g. IPv6 on an IPv4-only machine)
 
 In JSON mode the result is `{ "domain", "certificates_match", "addresses": [...] }`, where each address is the usual certificate object plus `ip` and `fingerprint` (a skipped address is `{ "ip", "skipped": true, "error" }`, and a real failure `{ "ip", "error" }`). Exit code: `1` if nothing was reachable or an address failed for a real reason, otherwise `2` if the certificates differ or any expires within `-threshold`, otherwise `0`.
 
+</details>
+
+<details>
+<summary><strong>Monitoring &amp; integrations</strong> (Prometheus · CSV · Nagios/Icinga)</summary>
+
+Machine-readable report formats for plugging ssl-watch into a monitoring stack. All three work for a single domain or a batch (with `-concurrency`), and none combines with `-all-ips`/`-certfile`.
+
 ### Prometheus output (`-output prometheus`)
 
 Emits metrics in the Prometheus exposition format — one set per domain (single or batch) — for scraping via the node_exporter [textfile collector](https://github.com/prometheus/node_exporter#textfile-collector) or alerting:
@@ -371,6 +378,26 @@ down.example,,,,,,,,failed to connect to down.example:443: ...
 
 Like `prometheus`, it works for a single domain or a batch (with `-concurrency`), but not with `-all-ips`/`-certfile`. Exit code follows the batch rule: `1` if any domain failed, otherwise `2` if any expires within `-threshold`, otherwise `0`.
 
+### Nagios / Icinga output (`-output nagios`)
+
+A monitoring-plugin status line with performance data, and **Nagios exit codes** (`0` OK / `1` WARNING / `2` CRITICAL) — drop-in for a Nagios/Icinga `check_command`. A certificate that is expired, has an invalid chain, or fails `-pin`/`-expect-issuer` is CRITICAL; one expiring within `-threshold` (or any warning under `-strict`) is WARNING; otherwise OK.
+
+```text
+$ ssl-watch -domain github.com -threshold 21 -output nagios
+SSL OK - github.com: valid, expires in 41 days (2026-08-02 23:59 UTC) | 'github.com'=41;21;;
+```
+
+With several domains the first line summarises the worst status and the counts, followed by one detail line per domain (Nagios shows the first line and reads the rest as long output):
+
+```text
+$ ssl-watch -domain github.com,expired.example -threshold 21 -output nagios
+SSL CRITICAL - 1 OK, 0 WARNING, 1 CRITICAL | 'github.com'=41;21;; 'expired.example'=-3;21;;
+OK github.com: valid, expires in 41 days (2026-08-02 23:59 UTC)
+CRITICAL expired.example: certificate expired on 2026-06-19 12:00 UTC
+```
+
+Like the other report formats it works for a single domain or a batch, but not with `-all-ips`/`-certfile`.
+
 </details>
 
 <details>
@@ -382,6 +409,8 @@ Like `prometheus`, it works for a single domain or a batch (with `-concurrency`)
 - `1` — an error occurred (connection failure, parse error, invalid arguments).
 
 When several domains are checked, the codes are aggregated: `1` if any domain failed to be retrieved, otherwise `2` if any certificate expires within `-threshold`, otherwise `0`.
+
+> **Note:** `-output nagios` deliberately uses **Nagios** exit codes instead (`0` OK / `1` WARNING / `2` CRITICAL), to satisfy the monitoring-plugin convention.
 
 </details>
 
