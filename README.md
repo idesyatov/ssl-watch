@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/idesyatov/ssl-watch/actions/workflows/ci.yml/badge.svg)](https://github.com/idesyatov/ssl-watch/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/idesyatov/ssl-watch)](https://github.com/idesyatov/ssl-watch/releases)
+[![ghcr.io](https://img.shields.io/badge/ghcr.io-ssl--watch-2496ED?logo=docker&logoColor=white)](https://github.com/idesyatov/ssl-watch/pkgs/container/ssl-watch)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/idesyatov/ssl-watch)](go.mod)
 [![Go Report Card](https://goreportcard.com/badge/github.com/idesyatov/ssl-watch)](https://goreportcard.com/report/github.com/idesyatov/ssl-watch)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
