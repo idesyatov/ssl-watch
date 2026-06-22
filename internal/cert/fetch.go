@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -39,7 +41,7 @@ func (f *CertificateFetcherImpl) Fetch(domain, port, ipaddr string, opts FetchOp
 		tlsConfig.Certificates = []tls.Certificate{*opts.ClientCert}
 	}
 
-	conn, err := dialTLS(address, opts.Timeout, opts.StartTLS, tlsConfig)
+	conn, err := dialTLS(address, opts.Timeout, opts.StartTLS, opts.Proxy, tlsConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -87,29 +89,23 @@ func verifyChain(certs []*x509.Certificate, name string, roots *x509.CertPool) e
 	return err
 }
 
-// dialTLS opens a TLS connection to address. When starttls is empty it dials TLS
-// directly; otherwise it connects in plaintext, upgrades via the protocol's
-// STARTTLS command and then performs the TLS handshake. The timeout bounds both
-// the connection and the STARTTLS negotiation.
-func dialTLS(address string, timeout time.Duration, starttls string, cfg *tls.Config) (*tls.Conn, error) {
-	if starttls == "" {
-		dialer := &net.Dialer{Timeout: timeout}
-		conn, err := tls.DialWithDialer(dialer, "tcp", address, cfg)
-		if err != nil {
-			return nil, fmt.Errorf("failed to connect to %s: %v", address, err)
-		}
-		return conn, nil
-	}
-
-	conn, err := net.DialTimeout("tcp", address, timeout)
+// dialTLS opens a TLS connection to address, optionally through an HTTP CONNECT
+// proxy and/or a STARTTLS upgrade. It dials the raw TCP connection (directly or
+// via the proxy), runs the STARTTLS negotiation when requested, and performs the
+// TLS handshake. The timeout bounds the connection, the negotiation and the
+// handshake.
+func dialTLS(address string, timeout time.Duration, starttls, proxy string, cfg *tls.Config) (*tls.Conn, error) {
+	conn, err := dialRaw(address, timeout, proxy)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to %s: %v", address, err)
+		return nil, err
 	}
-	// Bound the plaintext negotiation and handshake by the same timeout.
+	// Bound the negotiation and handshake by the same timeout.
 	_ = conn.SetDeadline(time.Now().Add(timeout))
-	if err := negotiateStartTLS(conn, starttls); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("STARTTLS (%s) failed for %s: %v", starttls, address, err)
+	if starttls != "" {
+		if err := negotiateStartTLS(conn, starttls); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("STARTTLS (%s) failed for %s: %v", starttls, address, err)
+		}
 	}
 
 	tlsConn := tls.Client(conn, cfg)
@@ -119,6 +115,79 @@ func dialTLS(address string, timeout time.Duration, starttls string, cfg *tls.Co
 	}
 	_ = conn.SetDeadline(time.Time{})
 	return tlsConn, nil
+}
+
+// dialRaw opens a raw TCP connection to address, directly or — when proxy is set
+// — through an HTTP CONNECT proxy.
+func dialRaw(address string, timeout time.Duration, proxy string) (net.Conn, error) {
+	if proxy == "" {
+		conn, err := net.DialTimeout("tcp", address, timeout)
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to %s: %v", address, err)
+		}
+		return conn, nil
+	}
+	return dialViaProxy(address, timeout, proxy)
+}
+
+// dialViaProxy connects to an HTTP proxy and issues a CONNECT request to open a
+// tunnel to target, returning the tunneled connection ready for a TLS handshake.
+// Only the http scheme is supported; optional userinfo becomes Basic auth.
+func dialViaProxy(target string, timeout time.Duration, proxy string) (net.Conn, error) {
+	u, err := url.Parse(proxy)
+	if err != nil {
+		return nil, fmt.Errorf("invalid -proxy %q: %v", proxy, err)
+	}
+	if u.Scheme != "" && u.Scheme != "http" {
+		return nil, fmt.Errorf("unsupported proxy scheme %q (only http is supported)", u.Scheme)
+	}
+	if u.Host == "" {
+		return nil, fmt.Errorf("invalid -proxy %q: missing host", proxy)
+	}
+
+	conn, err := net.DialTimeout("tcp", u.Host, timeout)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to proxy %s: %v", u.Host, err)
+	}
+	_ = conn.SetDeadline(time.Now().Add(timeout))
+
+	req := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n", target, target)
+	if u.User != nil {
+		pass, _ := u.User.Password()
+		token := base64.StdEncoding.EncodeToString([]byte(u.User.Username() + ":" + pass))
+		req += "Proxy-Authorization: Basic " + token + "\r\n"
+	}
+	req += "\r\n"
+	if _, err := conn.Write([]byte(req)); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to send CONNECT to proxy %s: %v", u.Host, err)
+	}
+
+	br := bufio.NewReader(conn)
+	status, err := readLine(br)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("proxy %s: failed to read CONNECT response: %v", u.Host, err)
+	}
+	// Status line: "HTTP/1.1 200 Connection established".
+	fields := strings.SplitN(status, " ", 3)
+	if len(fields) < 2 || fields[1] != "200" {
+		conn.Close()
+		return nil, fmt.Errorf("proxy %s refused CONNECT to %s: %s", u.Host, target, status)
+	}
+	// Drain the remaining response headers up to the blank line.
+	for {
+		line, err := readLine(br)
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("proxy %s: failed to read CONNECT headers: %v", u.Host, err)
+		}
+		if line == "" {
+			break
+		}
+	}
+	_ = conn.SetDeadline(time.Time{})
+	return conn, nil
 }
 
 // negotiateStartTLS performs the protocol-specific STARTTLS exchange on a

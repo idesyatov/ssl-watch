@@ -138,6 +138,7 @@ func main() {
 		Timeout:    timeout,
 		StartTLS:   cfg.StartTLS,
 		ServerName: cfg.ServerName,
+		Proxy:      cfg.Proxy,
 	}
 	if cfg.CAFile != "" {
 		roots, loadErr := cert.LoadCAFile(cfg.CAFile)
@@ -255,6 +256,9 @@ func validate(cfg flags.Config, targets []target) error {
 	}
 	if (cfg.ClientCert != "" || cfg.ClientKey != "") && cfg.CertFile != "" {
 		return errors.New("-client-cert/-client-key cannot be combined with -certfile")
+	}
+	if cfg.Proxy != "" && cfg.CertFile != "" {
+		return errors.New("-proxy cannot be combined with -certfile")
 	}
 	if cfg.ServerName != "" && len(targets) > 1 {
 		return errors.New("-servername cannot be combined with multiple domains")

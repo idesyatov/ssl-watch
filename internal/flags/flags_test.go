@@ -38,6 +38,7 @@ func TestParse(t *testing.T) {
 		"-timeout", "5",
 		"-concurrency", "8",
 		"-starttls", "smtp",
+		"-proxy", "http://127.0.0.1:3128",
 		"-version"}
 
 	// Create a new instance of the DefaultFlagParser
@@ -90,6 +91,9 @@ func TestParse(t *testing.T) {
 	}
 	if cfg.StartTLS != "smtp" {
 		t.Errorf("expected starttls to be 'smtp', got '%s'", cfg.StartTLS)
+	}
+	if cfg.Proxy != "http://127.0.0.1:3128" {
+		t.Errorf("expected proxy to be parsed, got '%s'", cfg.Proxy)
 	}
 	if !cfg.Chain {
 		t.Error("expected chain to be true")
@@ -168,7 +172,7 @@ func TestUsage(t *testing.T) {
 	parser.Usage()
 
 	out := buf.String()
-	for _, want := range []string{GitURL, "Usage:", "Target:", "Connection:", "Output:", "Monitoring:", "-domain", "-domain-file", "-threshold", "-timeout", "-concurrency", "-starttls", "-cafile", "-servername", "-client-cert", "-client-key", "-chain", "-fingerprint", "-pin", "-expect-issuer", "-strict", "-pem", "-export", "-all-ips", "-4", "-6", "prometheus", "csv"} {
+	for _, want := range []string{GitURL, "Usage:", "Target:", "Connection:", "Output:", "Monitoring:", "-domain", "-domain-file", "-threshold", "-timeout", "-concurrency", "-starttls", "-proxy", "-cafile", "-servername", "-client-cert", "-client-key", "-chain", "-fingerprint", "-pin", "-expect-issuer", "-strict", "-pem", "-export", "-all-ips", "-4", "-6", "prometheus", "csv"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected usage output to contain %q, got:\n%s", want, out)
 		}

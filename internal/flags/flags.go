@@ -42,6 +42,7 @@ type Config struct {
 	Timeout      int    // Connection timeout in seconds for fetching a remote certificate
 	Concurrency  int    // Number of targets to check in parallel in a batch (1 = sequential)
 	StartTLS     string // STARTTLS protocol to upgrade the connection: smtp/imap/pop3/ftp (empty = direct TLS)
+	Proxy        string // HTTP CONNECT proxy URL (http://[user:pass@]host:port); empty = direct
 	ShowVersion  bool   // Show version and exit
 }
 
@@ -89,6 +90,7 @@ type DefaultFlagParser struct {
 	timeout      *int
 	concurrency  *int
 	starttls     *string
+	proxy        *string
 	showVersion  *bool
 }
 
@@ -123,6 +125,7 @@ func (d *DefaultFlagParser) Parse() Config {
 		Timeout:      *d.timeout,
 		Concurrency:  *d.concurrency,
 		StartTLS:     *d.starttls,
+		Proxy:        *d.proxy,
 		ShowVersion:  *d.showVersion,
 	}
 }
@@ -169,6 +172,7 @@ func NewDefaultFlagParser() FlagParser {
 		timeout:      fs.Int("timeout", 10, "Connection timeout in seconds when fetching a remote certificate"),
 		concurrency:  fs.Int("concurrency", 1, "Number of targets to check in parallel when several are given (1 = sequential)"),
 		starttls:     fs.String("starttls", "", "Upgrade the connection via STARTTLS: smtp, imap, pop3 or ftp (default: direct TLS)"),
+		proxy:        fs.String("proxy", "", "Route the connection through an HTTP CONNECT proxy (http://[user:pass@]host:port)"),
 		showVersion:  fs.Bool("version", false, "Show version"),
 	}
 
@@ -213,6 +217,7 @@ func NewDefaultFlagParser() FlagParser {
 		flagLine("ipaddr")
 		flagLine("servername")
 		flagLine("starttls")
+		flagLine("proxy")
 		flagLine("timeout")
 		flagLine("concurrency")
 		flagLine("cafile")

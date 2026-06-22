@@ -29,6 +29,7 @@ type FetchOptions struct {
 	ServerName string           // SNI and hostname to verify against; empty = use domain
 	Roots      *x509.CertPool   // Trust anchors for verification; nil = system roots
 	ClientCert *tls.Certificate // Client certificate for mutual TLS; nil = none
+	Proxy      string           // HTTP CONNECT proxy URL; empty = direct connection
 }
 
 // CertificateFetcher defines an interface for fetching certificates from a domain or IP address.

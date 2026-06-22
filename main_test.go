@@ -64,6 +64,8 @@ func TestValidate(t *testing.T) {
 		{"client-cert without key", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, ClientCert: "c.crt"}, one, true},
 		{"client-cert + certfile", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, ClientCert: "c.crt", ClientKey: "c.key", CertFile: "f.pem"}, nil, true},
 		{"client-cert + key ok", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, ClientCert: "c.crt", ClientKey: "c.key"}, one, false},
+		{"proxy + certfile", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, Proxy: "http://127.0.0.1:3128", CertFile: "f.pem"}, nil, true},
+		{"proxy ok", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, Proxy: "http://127.0.0.1:3128"}, one, false},
 		{"servername multi", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, ServerName: "x"}, two, true},
 		{"pin multi", flags.Config{Output: "text", Timeout: 10, Concurrency: 1, Pin: "sha256:ab"}, two, true},
 		{"pem + json", flags.Config{Output: "json", Timeout: 10, Concurrency: 1, Pem: true}, one, true},

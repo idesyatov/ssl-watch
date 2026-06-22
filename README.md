@@ -116,6 +116,30 @@ cd ssl-watch
 make build
 ```
 
+### Docker (`ghcr.io`)
+
+A multi-arch (amd64/arm64) image is published per release. It runs the static binary on `scratch` with a CA bundle baked in, so chain verification works out of the box:
+
+```bash
+docker run --rm ghcr.io/idesyatov/ssl-watch:latest -domain github.com
+```
+
+This is aimed at CI gates and Kubernetes CronJobs rather than interactive use — e.g. fail a pipeline when a certificate is close to expiry:
+
+```yaml
+# GitLab CI
+check-cert:
+  image: ghcr.io/idesyatov/ssl-watch:latest
+  script: ["ssl-watch -domain example.com -threshold 21 -strict"]
+```
+
+> **Why the CA bundle matters:** the binary verifies chains against the system roots. A bare `scratch` image has none, so every chain would report `INVALID` — the published image copies `ca-certificates` in to avoid that. If you build your own minimal image, do the same. To build the image locally, produce a static Linux binary first, then `docker build`:
+>
+> ```bash
+> CGO_ENABLED=0 go build -o ssl-watch .
+> docker build -t ssl-watch:local .
+> ```
+
 </details>
 
 <details>
@@ -133,6 +157,7 @@ make build
 - `-ipaddr <ipaddr>` — connect to a specific IP (only valid with a single domain).
 - `-servername <name>` — SNI and hostname to verify against, overriding the domain (e.g. to check a specific vhost's certificate on a host reached by `-ipaddr`).
 - `-starttls <proto>` — upgrade via STARTTLS before reading the certificate: `smtp`, `imap`, `pop3` or `ftp`.
+- `-proxy <url>` — route the connection through an HTTP `CONNECT` proxy (`http://[user:pass@]host:port`); optional userinfo becomes Basic auth. Works with `-starttls`/`-all-ips`. Only the `http` scheme is supported (no SOCKS).
 - `-timeout <seconds>` — connection timeout when fetching (default `10`).
 - `-concurrency <N>` — number of targets to check in parallel when several are given (default `1` = sequential). Output order is preserved regardless. No effect on a single target.
 - `-cafile <path>` — verify the chain against the roots in this PEM bundle **instead of** the system roots (like `openssl verify -CAfile` / `curl --cacert`). Useful for an internal/corporate/national CA. Cannot be combined with `-insecure`.
