@@ -94,6 +94,104 @@ func TestWriteCSV(t *testing.T) {
 	}
 }
 
+// TestWriteNagios verifies the Nagios plugin output and exit codes: OK with
+// perfdata, WARNING on an upcoming expiry within -threshold, CRITICAL on an
+// expired certificate and on a fetch error, and the multi-target summary that
+// reports the worst status with per-target counts.
+func TestWriteNagios(t *testing.T) {
+	now := time.Now()
+	ok := genCert(t, "ok.example", now.Add(90*24*time.Hour))
+	soon := genCert(t, "soon.example", now.Add(8*24*time.Hour))
+	expired := genCert(t, "exp.example", now.Add(-24*time.Hour))
+	infoOf := func(c *x509.Certificate) *CertInfo {
+		return &CertInfo{Cert: c, Chain: []*x509.Certificate{c}, Verified: true}
+	}
+
+	t.Run("ok with perfdata", func(t *testing.T) {
+		var buf strings.Builder
+		code := WriteNagios(&buf, []PromSample{{Domain: "ok.example", Info: infoOf(ok)}}, PrintOptions{}, false)
+		if code != nagiosOK {
+			t.Fatalf("expected OK (0), got %d", code)
+		}
+		out := buf.String()
+		if !strings.HasPrefix(out, "SSL OK - ok.example: valid") {
+			t.Errorf("unexpected OK line: %q", out)
+		}
+		if !strings.Contains(out, "| 'ok.example'=") {
+			t.Errorf("expected perfdata, got: %q", out)
+		}
+	})
+
+	t.Run("warning on threshold", func(t *testing.T) {
+		var buf strings.Builder
+		code := WriteNagios(&buf, []PromSample{{Domain: "soon.example", Info: infoOf(soon)}}, PrintOptions{Threshold: 30}, false)
+		if code != nagiosWarning {
+			t.Fatalf("expected WARNING (1), got %d", code)
+		}
+		out := buf.String()
+		if !strings.HasPrefix(out, "SSL WARNING - soon.example: expires in") {
+			t.Errorf("unexpected WARNING line: %q", out)
+		}
+		if !strings.Contains(out, ";30;;") {
+			t.Errorf("expected perfdata with threshold in the warn slot, got: %q", out)
+		}
+	})
+
+	t.Run("critical on expired", func(t *testing.T) {
+		var buf strings.Builder
+		code := WriteNagios(&buf, []PromSample{{Domain: "exp.example", Info: infoOf(expired)}}, PrintOptions{}, false)
+		if code != nagiosCritical {
+			t.Fatalf("expected CRITICAL (2), got %d", code)
+		}
+		if out := buf.String(); !strings.HasPrefix(out, "SSL CRITICAL - exp.example: certificate expired") {
+			t.Errorf("unexpected CRITICAL line: %q", out)
+		}
+	})
+
+	t.Run("critical on error, no perfdata", func(t *testing.T) {
+		var buf strings.Builder
+		code := WriteNagios(&buf, []PromSample{{Domain: "bad.example", Err: errors.New("connection refused")}}, PrintOptions{}, false)
+		if code != nagiosCritical {
+			t.Fatalf("expected CRITICAL (2), got %d", code)
+		}
+		out := buf.String()
+		if !strings.HasPrefix(out, "SSL CRITICAL - bad.example: connection refused") {
+			t.Errorf("unexpected error line: %q", out)
+		}
+		if strings.Contains(out, "|") {
+			t.Errorf("a failed fetch should carry no perfdata, got: %q", out)
+		}
+	})
+
+	t.Run("multi reports worst with counts", func(t *testing.T) {
+		var buf strings.Builder
+		samples := []PromSample{
+			{Domain: "ok.example", Info: infoOf(ok)},
+			{Domain: "soon.example", Info: infoOf(soon)},
+			{Domain: "bad.example", Err: errors.New("connection refused")},
+		}
+		code := WriteNagios(&buf, samples, PrintOptions{Threshold: 30}, false)
+		if code != nagiosCritical {
+			t.Fatalf("expected worst status CRITICAL (2), got %d", code)
+		}
+		out := buf.String()
+		for _, want := range []string{
+			"SSL CRITICAL - 1 OK, 1 WARNING, 1 CRITICAL",
+			"OK ok.example: valid",
+			"WARNING soon.example: expires in",
+			"CRITICAL bad.example: connection refused",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("multi output missing %q:\n%s", want, out)
+			}
+		}
+		// Perfdata for the two retrieved targets, none for the failed one.
+		if !strings.Contains(out, "'ok.example'=") || !strings.Contains(out, "'soon.example'=") {
+			t.Errorf("expected perfdata for retrieved targets:\n%s", out)
+		}
+	})
+}
+
 // TestPrintAllIPs verifies the per-address table, the "differ" verdict and the
 // JSON object, including the AllIPsResult summary.
 func TestPrintAllIPs(t *testing.T) {

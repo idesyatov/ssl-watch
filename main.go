@@ -167,6 +167,11 @@ func main() {
 		os.Exit(runCSV(fetcher, targets, cfg, fetchOpts))
 	}
 
+	// Nagios/Icinga plugin: a status line per run, with Nagios exit codes.
+	if cfg.Output == "nagios" {
+		os.Exit(runNagios(fetcher, targets, cfg, opts, fetchOpts))
+	}
+
 	// -all-ips: resolve the domain and check the certificate on every address.
 	if cfg.AllIPs {
 		os.Exit(runAllIPs(fetcher, targets[0], cfg, opts, fetchOpts))
@@ -213,8 +218,8 @@ func validate(cfg flags.Config, targets []target) error {
 	if err := validation.NewDefaultInputValidator().Validate(domainArg, cfg.CertFile); err != nil {
 		return err
 	}
-	if cfg.Output != "text" && cfg.Output != "json" && cfg.Output != "prometheus" && cfg.Output != "csv" {
-		return fmt.Errorf("invalid -output %q (expected \"text\", \"json\", \"prometheus\" or \"csv\")", cfg.Output)
+	if cfg.Output != "text" && cfg.Output != "json" && cfg.Output != "prometheus" && cfg.Output != "csv" && cfg.Output != "nagios" {
+		return fmt.Errorf("invalid -output %q (expected \"text\", \"json\", \"prometheus\", \"csv\" or \"nagios\")", cfg.Output)
 	}
 	if cfg.Timeout <= 0 {
 		return fmt.Errorf("invalid -timeout %d (expected a positive number of seconds)", cfg.Timeout)
@@ -284,7 +289,7 @@ func validate(cfg flags.Config, targets []target) error {
 			return errors.New("-pem/-export cannot be combined with -expect-issuer/-strict")
 		}
 	}
-	if cfg.Output == "prometheus" || cfg.Output == "csv" {
+	if cfg.Output == "prometheus" || cfg.Output == "csv" || cfg.Output == "nagios" {
 		switch {
 		case cfg.AllIPs:
 			return fmt.Errorf("-output %s cannot be combined with -all-ips", cfg.Output)
@@ -352,6 +357,14 @@ func runCSV(fetcher cert.CertificateFetcher, targets []target, cfg flags.Config,
 		return exitSoft
 	}
 	return exitOK
+}
+
+// runNagios fetches every target and writes a Nagios/Icinga plugin result. The
+// process exit code follows the Nagios convention (0 OK / 1 WARNING / 2 CRITICAL),
+// deliberately overriding the tool's normal exit codes for this output format.
+func runNagios(fetcher cert.CertificateFetcher, targets []target, cfg flags.Config, opts cert.PrintOptions, fetchOpts cert.FetchOptions) int {
+	samples, _, _ := collectSamples(fetcher, targets, cfg, fetchOpts)
+	return cert.WriteNagios(os.Stdout, samples, opts, cfg.Strict)
 }
 
 // collectSamples fetches every target (respecting -concurrency, order preserved)

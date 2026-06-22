@@ -147,6 +147,111 @@ func WriteCSV(w io.Writer, samples []PromSample) error {
 	return cw.Error()
 }
 
+// Nagios/Icinga plugin exit codes (nagios-plugins.org/doc/guidelines.html).
+const (
+	nagiosOK       = 0
+	nagiosWarning  = 1
+	nagiosCritical = 2
+)
+
+// nagiosStatusText maps a Nagios exit code to its label.
+var nagiosStatusText = []string{"OK", "WARNING", "CRITICAL", "UNKNOWN"}
+
+// nagiosEval determines the Nagios status and a human detail line for one sample,
+// applying Nagios severity: an unreachable/invalid/expired/mismatched certificate
+// is CRITICAL, an upcoming expiry within -threshold (or any warning under -strict)
+// is WARNING, otherwise OK.
+func nagiosEval(s PromSample, opts PrintOptions, strict bool) (code int, detail string) {
+	if s.Info == nil {
+		return nagiosCritical, fmt.Sprintf("%s: %v", s.Domain, s.Err)
+	}
+	info := s.Info
+	c := info.Cert
+	expiry := c.NotAfter.Format(dateFormat)
+	switch {
+	case opts.Pin != "" && !MatchesPin(c, opts.Pin):
+		return nagiosCritical, fmt.Sprintf("%s: certificate does not match the pin", s.Domain)
+	case opts.ExpectIssuer != "" && !IssuerMatches(c, opts.ExpectIssuer):
+		return nagiosCritical, fmt.Sprintf("%s: unexpected issuer %s", s.Domain, c.Issuer.String())
+	case info.Verified && info.ChainErr != nil:
+		kind, _ := classifyChainErr(info)
+		return nagiosCritical, fmt.Sprintf("%s: chain INVALID (%s)", s.Domain, kind)
+	}
+	days := info.MinDaysUntilExpiry()
+	switch {
+	case days < 0:
+		return nagiosCritical, fmt.Sprintf("%s: certificate expired on %s", s.Domain, expiry)
+	case opts.Threshold > 0 && days < opts.Threshold:
+		return nagiosWarning, fmt.Sprintf("%s: expires in %d days (%s)", s.Domain, days, expiry)
+	case strict && HasWarnings(info):
+		return nagiosWarning, fmt.Sprintf("%s: warnings present, expires in %d days (%s)", s.Domain, days, expiry)
+	}
+	return nagiosOK, fmt.Sprintf("%s: valid, expires in %d days (%s)", s.Domain, days, expiry)
+}
+
+// nagiosPerf renders the performance data token for one sample (empty when the
+// certificate could not be retrieved): days remaining with -threshold in the
+// warning slot.
+func nagiosPerf(s PromSample, opts PrintOptions) string {
+	if s.Info == nil {
+		return ""
+	}
+	warn := ""
+	if opts.Threshold > 0 {
+		warn = strconv.Itoa(opts.Threshold)
+	}
+	return fmt.Sprintf("'%s'=%d;%s;;", s.Domain, s.Info.MinDaysUntilExpiry(), warn)
+}
+
+// WriteNagios renders the samples as a Nagios/Icinga plugin result and returns the
+// Nagios exit code (0 OK / 1 WARNING / 2 CRITICAL). For a single target it prints
+// one "SSL <STATUS> - <detail> | <perfdata>" line; for several it prints a summary
+// line (worst status + counts + perfdata) followed by one detail line per target.
+// The returned code follows the Nagios convention, overriding the tool's normal
+// exit codes.
+func WriteNagios(w io.Writer, samples []PromSample, opts PrintOptions, strict bool) int {
+	codes := make([]int, len(samples))
+	details := make([]string, len(samples))
+	perfs := make([]string, 0, len(samples))
+	worst := nagiosOK
+	for i, s := range samples {
+		codes[i], details[i] = nagiosEval(s, opts, strict)
+		if codes[i] > worst {
+			worst = codes[i]
+		}
+		if p := nagiosPerf(s, opts); p != "" {
+			perfs = append(perfs, p)
+		}
+	}
+
+	perf := ""
+	if len(perfs) > 0 {
+		perf = " | " + strings.Join(perfs, " ")
+	}
+
+	if len(samples) == 1 {
+		fmt.Fprintf(w, "SSL %s - %s%s\n", nagiosStatusText[worst], details[0], perf)
+		return worst
+	}
+
+	var ok, warn, crit int
+	for _, code := range codes {
+		switch code {
+		case nagiosOK:
+			ok++
+		case nagiosWarning:
+			warn++
+		case nagiosCritical:
+			crit++
+		}
+	}
+	fmt.Fprintf(w, "SSL %s - %d OK, %d WARNING, %d CRITICAL%s\n", nagiosStatusText[worst], ok, warn, crit, perf)
+	for i := range samples {
+		fmt.Fprintf(w, "%s %s\n", nagiosStatusText[codes[i]], details[i])
+	}
+	return worst
+}
+
 // IPResult is the certificate (or error) obtained from one resolved address.
 // Skipped marks an address that is unreachable from this host (no route to its
 // family) — a benign condition rather than a real failure.
@@ -193,9 +298,9 @@ func tallyIPs(results []IPResult) (distinct, reachable, skipped int, hadError bo
 func PrintAllIPs(domain string, results []IPResult, opts PrintOptions) AllIPsResult {
 	distinct, reachable, skipped, hadError, minDays, _ := tallyIPs(results)
 	if opts.JSON {
-		printAllIPsJSON(domain, results, opts)
+		printAllIPsJSON(domain, results, distinct, opts)
 	} else {
-		printAllIPsText(domain, results, opts)
+		printAllIPsText(domain, results, distinct, reachable, skipped, opts)
 	}
 	return AllIPsResult{
 		AllMatch:    distinct <= 1,
@@ -225,7 +330,8 @@ func anyPinMismatch(results []IPResult, pin string) bool {
 }
 
 // printAllIPsText renders the addresses as a compact table with a final verdict.
-func printAllIPsText(domain string, results []IPResult, opts PrintOptions) {
+// The distinct/reachable/skipped tallies are computed once by the caller.
+func printAllIPsText(domain string, results []IPResult, distinct, reachable, skipped int, opts PrintOptions) {
 	fmt.Printf("%s — checking %d address(es)\n", domain, len(results))
 	for _, r := range results {
 		switch {
@@ -257,7 +363,6 @@ func printAllIPsText(domain string, results []IPResult, opts PrintOptions) {
 		}
 	}
 
-	distinct, reachable, skipped, _, _, _ := tallyIPs(results)
 	switch {
 	case distinct >= 2:
 		fmt.Println(maybeColor("WARNING: certificates differ across addresses", colorYellow, opts.Color))
@@ -270,8 +375,8 @@ func printAllIPsText(domain string, results []IPResult, opts PrintOptions) {
 }
 
 // printAllIPsJSON renders the addresses as a JSON object with a match verdict.
-func printAllIPsJSON(domain string, results []IPResult, opts PrintOptions) {
-	distinct, _, _, _, _, _ := tallyIPs(results)
+// distinct is computed once by the caller.
+func printAllIPsJSON(domain string, results []IPResult, distinct int, opts PrintOptions) {
 	addresses := make([]any, 0, len(results))
 	for _, r := range results {
 		switch {

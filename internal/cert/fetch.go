@@ -141,13 +141,18 @@ func dialViaProxy(target string, timeout time.Duration, proxy string) (net.Conn,
 	if u.Scheme != "" && u.Scheme != "http" {
 		return nil, fmt.Errorf("unsupported proxy scheme %q (only http is supported)", u.Scheme)
 	}
-	if u.Host == "" {
+	if u.Hostname() == "" {
 		return nil, fmt.Errorf("invalid -proxy %q: missing host", proxy)
 	}
+	// Default to the http scheme's port when the URL omits one.
+	proxyAddr := u.Host
+	if u.Port() == "" {
+		proxyAddr = net.JoinHostPort(u.Hostname(), "80")
+	}
 
-	conn, err := net.DialTimeout("tcp", u.Host, timeout)
+	conn, err := net.DialTimeout("tcp", proxyAddr, timeout)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to proxy %s: %v", u.Host, err)
+		return nil, fmt.Errorf("failed to connect to proxy %s: %v", proxyAddr, err)
 	}
 	_ = conn.SetDeadline(time.Now().Add(timeout))
 
@@ -160,27 +165,27 @@ func dialViaProxy(target string, timeout time.Duration, proxy string) (net.Conn,
 	req += "\r\n"
 	if _, err := conn.Write([]byte(req)); err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("failed to send CONNECT to proxy %s: %v", u.Host, err)
+		return nil, fmt.Errorf("failed to send CONNECT to proxy %s: %v", proxyAddr, err)
 	}
 
 	br := bufio.NewReader(conn)
 	status, err := readLine(br)
 	if err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("proxy %s: failed to read CONNECT response: %v", u.Host, err)
+		return nil, fmt.Errorf("proxy %s: failed to read CONNECT response: %v", proxyAddr, err)
 	}
 	// Status line: "HTTP/1.1 200 Connection established".
 	fields := strings.SplitN(status, " ", 3)
 	if len(fields) < 2 || fields[1] != "200" {
 		conn.Close()
-		return nil, fmt.Errorf("proxy %s refused CONNECT to %s: %s", u.Host, target, status)
+		return nil, fmt.Errorf("proxy %s refused CONNECT to %s: %s", proxyAddr, target, status)
 	}
 	// Drain the remaining response headers up to the blank line.
 	for {
 		line, err := readLine(br)
 		if err != nil {
 			conn.Close()
-			return nil, fmt.Errorf("proxy %s: failed to read CONNECT headers: %v", u.Host, err)
+			return nil, fmt.Errorf("proxy %s: failed to read CONNECT headers: %v", proxyAddr, err)
 		}
 		if line == "" {
 			break

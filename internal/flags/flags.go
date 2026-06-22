@@ -30,7 +30,7 @@ type Config struct {
 	Threshold    int    // Expiry warning threshold in days (0 = disabled); drives exit code 2
 	ExpectIssuer string // Assert the issuer contains this substring; exit 3 on mismatch
 	Strict       bool   // Treat warnings as failures (exit 2)
-	Output       string // Output format: "text" or "json"
+	Output       string // Output format: text, json, prometheus, csv or nagios
 	Chain        bool   // Print every certificate in the chain
 	Fingerprint  bool   // Print the certificate and public-key SHA-256 fingerprints
 	Pin          string // Verify against a pinned fingerprint (sha256:<hex>); exit 3 on mismatch
@@ -158,7 +158,7 @@ func NewDefaultFlagParser() FlagParser {
 		short:        fs.Bool("short", false, "Output only the number of days remaining until certificate expiration"),
 		insecure:     fs.Bool("insecure", false, "Skip certificate chain verification"),
 		threshold:    fs.Int("threshold", 0, "Warn (exit code 2) when days remaining is below this value (0 disables)"),
-		output:       fs.String("output", "text", "Output format: text, json, prometheus or csv"),
+		output:       fs.String("output", "text", "Output format: text, json, prometheus, csv or nagios"),
 		chain:        fs.Bool("chain", false, "Print every certificate in the chain"),
 		fingerprint:  fs.Bool("fingerprint", false, "Print the certificate and public-key SHA-256 fingerprints"),
 		pin:          fs.String("pin", "", "Verify against a pinned fingerprint (sha256:<hex>, cert or public key); exit 3 on mismatch"),
