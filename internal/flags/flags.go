@@ -1,3 +1,5 @@
+// Package flags defines, parses and documents the ssl-watch command-line flags,
+// exposing them as a Config value and rendering the grouped usage/help text.
 package flags
 
 import (

@@ -1,3 +1,5 @@
+// Package validation enforces ssl-watch's basic input requirement: at least one
+// of a domain or a certificate file must be supplied.
 package validation
 
 import "fmt"

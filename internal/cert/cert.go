@@ -1,3 +1,7 @@
+// Package cert is the certificate domain: it fetches certificates over TLS
+// (optionally via STARTTLS or an HTTP CONNECT proxy), loads them from PEM,
+// inspects trust/expiry/crypto, and renders the results as text, JSON,
+// Prometheus, CSV or a Nagios plugin line.
 package cert
 
 import (

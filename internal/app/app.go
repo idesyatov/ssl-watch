@@ -1,3 +1,6 @@
+// Package app is the ssl-watch command body: it parses flags, resolves targets,
+// validates the request and dispatches to the right output path over the cert
+// package. The root main package only calls os.Exit(app.Run()).
 package app
 
 import (
