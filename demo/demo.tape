@@ -28,8 +28,11 @@ Sleep 3s
 Hide Type "clear" Enter Show
 
 # 2. The headline feature: where trust breaks — classified reason + issuer trail.
+# Wait for the chain verdict to actually render (badssl can be slow) before the
+# dwell, so the output is captured instead of being cut off by the next clear.
 Type "ssl-watch -domain untrusted-root.badssl.com" Sleep 500ms Enter
-Sleep 3.5s
+Wait+Screen@20s /Chain:/
+Sleep 3s
 Hide Type "clear" Enter Show
 
 # 3. The full certificate chain (leaf + intermediates).
