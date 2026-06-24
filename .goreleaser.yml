@@ -37,6 +37,21 @@ archives:
       - README.md
       - LICENSE
 
+nfpms:
+  - id: packages
+    package_name: ssl-watch
+    ids:
+      - ssl-watch
+    vendor: idesyatov
+    homepage: https://github.com/idesyatov/ssl-watch
+    maintainer: idesyatov <noreply@github.com>
+    description: Inspect and monitor TLS/SSL certificates from the command line.
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+
 dockers:
   - id: ssl-watch-amd64
     goos: linux

@@ -107,6 +107,20 @@ Download an archive for your OS/arch from the [latest release](https://github.co
 
 SHA-256 checksums for all archives are published as `checksums.txt` on the same release page.
 
+### Linux packages (`.deb` / `.rpm`)
+
+Each release also ships `.deb` and `.rpm` packages (amd64/arm64) on the [release page](https://github.com/idesyatov/ssl-watch/releases/latest):
+
+```bash
+# Debian / Ubuntu
+sudo dpkg -i ssl-watch_*_linux_amd64.deb
+
+# RHEL / Fedora / openSUSE
+sudo rpm -i ssl-watch_*_linux_amd64.rpm
+```
+
+The binary is installed to `/usr/bin/ssl-watch`.
+
 ### From source
 
 ```bash
